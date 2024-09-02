@@ -1,0 +1,2926 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title> </title>
+    <style>
+      html, body { margin: 0; padding: 0; overflow: hidden; }
+      .text{position:absolute; z-index:100;font-family:Arial;font-weight:bold;font-size:2rem;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+      .gameOver{width: 1400px;height: 600px;position: absolute;color:black;font-family:Arial;font-weight:bold;font-size:8rem;display: flex;align-items:center;text-align: center;justify-content: center;}
+      .gameEnd{width: 1400px;height: 600px;position: absolute;color:black;font-family:Arial;font-weight:bold;font-size:8rem;display: flex;align-items:center;text-align: center;justify-content: center;}
+      .objective{width: 1400px;height: 600px;position: absolute;color:black;font-family:Arial;font-weight:bold;font-size:2rem;display: flex;align-items:self-start;text-align: center;justify-content: center;}
+    </style>
+  </head>
+  <body>
+    <script src="js/three@0.87.1.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.2.4/gsap.min.js"></script>
+    <script scr="https://github.com/mrdoob/three.js/blob/master/src/loaders/LoadingManager.js"></script>
+    <script src="js/OrbitControls.js"></script>
+    <script src="js/KeyboardState.js"></script>
+    <script src="js/Projector.js"></script>
+    <script src="js/CanvasRenderer.js"></script>
+    <script src="js/index.js"></script>
+    <script src="js/GLTFLoader.js"></script>
+    <script src="js/physi.js"></script>
+    <div id="text" class="text"></div>
+    <div id="gameOver" class="gameOver">Fim do Jogo!</div>
+    <div id="gameEnd" class="gameEnd">Vitória!</div>
+    <div id="objective" class="objective">Objetivo: Chegar ao fim do mapa.</div>
+    <script>
+/*
+CG-TP2
+Alterações:
+-Redudução da resolução -> Aumenta o FPS
+-Simplificação das texturas -> Aumenta o FPS
+-Remoção de objetos e modelos triviais -> Aumenta o FPS
+-Redução da distância de render -> Aumenta o FPS
+-Aplicação das colisões, as meshes da colisões são invisiveis.
+
+Funcionalidades:
+-Colisões.
+-Sistema de vidas.
+-Pontos de controlo.
+-Condições de vitória e derrota.
+-Inimigos e obstáculos com movimentos e animações.
+
+Movimentação:
+-A:Movimentação para a esquerda.
+-D:Movimentação para a direita.
+-W:Movimentação para a frente.
+-S:Movimentação para trás.
+-Q:Salto.
+-E:Imobilizar o personagem.
+
+Condição de vitória:
+-Chegar ao fim do mapa.
+
+Condição de derrota:
+-Perder todas as vidas.
+*/
+gameOver.style.visibility = "hidden";
+gameEnd.style.visibility = "hidden";
+var keyboard = new KeyboardState();
+Physijs.scripts.worker = "./js/physijs_worker.js";
+Physijs.scripts.ammo = "./ammo.js";
+
+class Light extends THREE.Object3D{
+  constructor(position){
+    super();
+  }
+  getLight(){
+    return this.light;
+  }
+}
+
+class HolophoteLigth extends Light{
+  constructor(position){
+    super(position);
+    this.light = new THREE.PointLight(0xffffff,1.5,50);
+    this.light.position.set( position.x,position.y,position.z );
+    this.light.castShadow = true;
+  }
+}
+
+class SunLigth extends Light{
+  constructor(position){
+    super(position);
+    this.light = new THREE.DirectionalLight(0xffffff, 0.8);
+    this.light.position.set( position.x,position.y,position.z );
+    this.light.castShadow = true;
+  }
+}
+
+
+class Obj{
+	constructor(){}
+}
+
+var urls = [
+  "./textures/envmap_miramar/miramar_ft.png",
+  "./textures/envmap_miramar/miramar_bk.png",
+  "./textures/envmap_miramar/miramar_up.png",
+  "./textures/envmap_miramar/miramar_dn.png",
+  "./textures/envmap_miramar/miramar_rt.png",
+  "./textures/envmap_miramar/miramar_lf.png",
+];
+var skyTexture = new THREE.CubeTextureLoader().load(urls);
+skyTexture.format = THREE.RGBFormat;
+var shader = THREE.ShaderLib['cube']; // init cube shader from built-in lib
+shader.uniforms['tCube'].value = skyTexture; // apply textures to shader
+var skyboxMaterial = new THREE.ShaderMaterial( {
+  fragmentShader: shader.fragmentShader,
+  vertexShader: shader.vertexShader,
+  uniforms: shader.uniforms,
+  depthWrite: false,
+  side: THREE.BackSide
+});
+
+var platTexture = new THREE.TextureLoader().load( "./textures/planks.jpg" );
+platTexture.wrapS = THREE.RepeatWrapping;
+platTexture.wrapT = THREE.RepeatWrapping;
+platTexture.repeat.set(1, 1);
+var platMaterial = new THREE.MeshPhongMaterial( { map: platTexture } );
+
+var platTextureSide = new THREE.TextureLoader().load( "./textures/wood.jpg" );
+platTextureSide.wrapS = THREE.RepeatWrapping;
+platTextureSide.wrapT = THREE.RepeatWrapping;
+platTextureSide.repeat.set( 1, 1 );
+var platMaterialSide = new THREE.MeshPhongMaterial( { map: platTextureSide } );
+
+let floorTexture = new THREE.TextureLoader().load( "./textures/dirt/Sandstone_Fossils_001_baseColor.jpg" );
+let floorMaterial = new THREE.MeshPhongMaterial( {map: floorTexture} );
+
+let concreteTexture = new THREE.TextureLoader().load( "./textures/concrete/Concrete_018_BaseColor.jpg" );
+let concreteMaterial = new THREE.MeshPhongMaterial( {map: concreteTexture} );
+
+//Classe que serve como superclasse para todos os Loaders presentes na aplicação, adicionado caso fosse necessário adicionar loaders para vários tipos de modelos.
+class Loader {
+  constructor(){}
+}
+
+//Loader para os modelos no formato GLTF.
+class LoaderGLTF extends Loader{
+  constructor(position,rotation,scale,path){
+    super();
+    let loader = new THREE.GLTFLoader();
+    loader.crossOrigin = true;
+    loader.load( path , function ( data ) {
+      var object = new THREE.Object3D();
+      object = data.scene;
+      object.position.set(position.x, position.y, position.z);
+      object.rotation.set(rotation.x, rotation.y, rotation.z);
+      object.scale.set(scale.x, scale.y, scale.z);
+      object.castShadow = true;
+      object.recieveShadow = true;
+      app.add(object);
+    });
+  }
+  
+  update(){}
+}
+
+//Classe associada á criação da skybox.
+class Skybox extends Obj{
+  constructor(){
+    super();
+    this.mesh = new THREE.Mesh(new THREE.BoxGeometry(2000, 2000, 2000), skyboxMaterial);
+    this.mesh.position.x +=900;
+  }
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada á criação do oceano presente no mapa.
+class Ocean extends Obj{
+  constructor(){
+    super();
+    let waterTexture = new THREE.TextureLoader().load( "./textures/water/water.jpg" );
+    waterTexture.wrapS = THREE.RepeatWrapping;
+    waterTexture.wrapT = THREE.RepeatWrapping;
+    waterTexture.repeat.set( 50, 50 );
+    let waterMaterial = new THREE.MeshPhongMaterial( {map: waterTexture} );
+    this.waterGeometry = new THREE. PlaneBufferGeometry(3000,3000,100,100);
+    this.mesh = new THREE.Mesh(this.waterGeometry, waterMaterial);
+    this.mesh.rotation.x = -Math.PI/2;
+    this.mesh.position.x += 1000;
+    this.mesh.position.y = -12;
+    this.count = this.waterGeometry.attributes.position.count;
+    this.mesh.castShadow = true;
+    this.mesh.recieveShadow = true;
+  }
+
+  update() {
+    //Realizado com base neste video:
+    //https://www.youtube.com/watch?v=ZYi0xGp882I
+    let now = (Date.now() / 300);
+    for(let i = 0;i<this.count;i++){
+        let x = this.waterGeometry.attributes.position.getX(i);
+        let y = this.waterGeometry.attributes.position.getY(i);
+        let xsin = Math.sin(x+now)*2.5;
+        let ycos = Math.sin(y+now)*1.5;
+        this.waterGeometry.attributes.position.setZ(i,xsin+ycos);
+    }
+    this.waterGeometry.computeVertexNormals();
+    this.waterGeometry.attributes.position.needsUpdate = true;
+  }
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um segmento no mapa, este segmento serve como o começo do mapa.
+class Start extends Obj{
+    constructor(position) {	
+      super();
+      this.mesh = new THREE.Group();
+      this.material = Physijs.createMaterial(
+        floorMaterial,
+        0.6,
+        0.8
+      );
+
+      let startBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(30,30,50),
+        this.material,  
+        0
+      ); 
+      startBox.position.set(position.x+10,position.y-10,position.z);
+      startBox.visible = false;
+      app.add(startBox);
+
+      let start  = new THREE.Mesh(new THREE.BoxGeometry(30,30,50), floorMaterial );
+      start.position.set(position.x+10,position.y-10,position.z);
+      this.mesh.add(start);
+
+      let endBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(30,30,50),
+        this.material,  
+        0
+      ); 
+      endBox.position.set(position.x+110,position.y-10,position.z);
+      endBox.visible = false;
+      app.add(endBox);
+      let end  = new THREE.Mesh(new THREE.BoxGeometry(30,30,50), floorMaterial );
+      end.position.set(position.x+110,position.y-10,position.z);
+      this.mesh.add(end);
+
+      let plat1Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      ); 
+      plat1Box.position.set(position.x+40,position.y-10,position.z-10);
+      plat1Box.visible = false;
+      app.add(plat1Box);
+      let plat1  = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      plat1.position.set(position.x+40,position.y-10,position.z-10);
+      this.mesh.add(plat1);
+
+      let plat2Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      ); 
+      plat2Box.position.set(position.x+60,position.y-10,position.z-10);
+      plat2Box.visible = false;
+      app.add(plat2Box);
+      let plat2  = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      plat2.position.set(position.x+60,position.y-10,position.z-10);
+      this.mesh.add(plat2);
+
+      let plat3Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      ); 
+      plat3Box.position.set(position.x+80,position.y-10,position.z-10);
+      plat3Box.visible = false;
+      app.add(plat3Box);
+      let plat3  = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      plat3.position.set(position.x+80,position.y-10,position.z-10);
+      this.mesh.add(plat3);
+
+      let plat4Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(70,30,20),
+        this.material,  
+        0
+      );
+      plat4Box.position.set(position.x+60,position.y-10,position.z+15);
+      plat4Box.visible = false;
+      app.add(plat4Box);
+      let plat4  = new THREE.Mesh(new THREE.BoxGeometry(70,30,20), floorMaterial);
+      plat4.position.set(position.x+60,position.y-10,position.z+15);
+      this.mesh.add(plat4);
+      
+      this.mesh.castShadow = true;
+      this.mesh.recieveShadow = true;
+  }
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um segmento do mapa, este segmento possui quatro versões.
+class Segment1 extends Obj{
+    constructor(position) {	
+      super();
+
+      this.material = Physijs.createMaterial(
+        floorMaterial,
+        0.6,
+        0.8
+      );
+
+      this.mesh = new THREE.Group();
+      let base_start  = new THREE.Mesh(new THREE.BoxGeometry(20,30,50), floorMaterial);
+      base_start.position.set(position.x+5,position.y-10,position.z);
+      this.mesh.add(base_start);
+      let startBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+      ); 
+      startBox.position.set(position.x+5,position.y-10,position.z);
+      startBox.visible = false;
+      app.add(startBox);
+      
+      let base_end  = new THREE.Mesh(new THREE.BoxGeometry(20,30,50), floorMaterial);
+      base_end.position.set(position.x+135,position.y-10,position.z);
+      this.mesh.add(base_end);
+      let endBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+      ); 
+      endBox.position.set(position.x+135,position.y-10,position.z);
+      endBox.visible = false;
+      app.add(endBox);
+
+      this.path = Math.floor(Math.random()*4);
+      this.mesh.add(base_end);
+      let plat1Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(30,30,10),
+        this.material,  
+        0
+      );
+      plat1Box.visible = false;
+
+      let plat2aBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,30),
+        this.material,  
+        0
+      );
+      plat2aBox.visible = false;
+
+      let plat2bBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      plat2bBox.visible = false;
+
+      let plat2cBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      plat2cBox.visible = false;
+      let plat3aBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(30,30,10),
+        this.material,  
+        0
+      );
+      plat3aBox.visible = false;
+
+      let plat3bBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(30,30,10),
+        this.material,  
+        0
+      );
+      plat3bBox.visible = false;
+
+      let plat4aBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      plat4aBox.visible = false;
+
+      let plat4bBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,30),
+        this.material,  
+        0
+      );
+      plat4bBox.visible = false;
+
+      let plat4cBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      plat4cBox.visible = false;
+
+      let plat5Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(30,30,10),
+        this.material,  
+        0
+      );
+      plat5Box.visible = false;
+
+      let plat1  = new THREE.Mesh(new THREE.BoxGeometry(30,30,10), floorMaterial);
+      let plat2a  = new THREE.Mesh(new THREE.BoxGeometry(10,30,30), floorMaterial);
+      let plat2b  = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let plat2c  = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let plat3a  = new THREE.Mesh(new THREE.BoxGeometry(30,30,10), floorMaterial);
+      let plat3b  = new THREE.Mesh(new THREE.BoxGeometry(30,30,10), floorMaterial);
+      let plat4a  = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let plat4b  = new THREE.Mesh(new THREE.BoxGeometry(10,30,30), floorMaterial);
+      let plat4c  = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let plat5  = new THREE.Mesh(new THREE.BoxGeometry(30,30,10), floorMaterial);
+
+      switch (this.path){
+        case 0:
+          plat1.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plat1);
+          plat1Box.position.set(position.x+30,position.y-10,position.z);
+          app.add(plat1Box);
+
+          plat2a.position.set(position.x+50,position.y-10,position.z);
+          this.mesh.add(plat2a);
+          plat2aBox.position.set(position.x+50,position.y-10,position.z);
+          app.add(plat2aBox);
+        
+          plat2b.position.set(position.x+50,position.y-10,position.z-20);
+          this.mesh.add(plat2b);
+          plat2bBox.position.set(position.x+50,position.y-10,position.z-20);
+          app.add(plat2bBox);
+
+          plat2c.position.set(position.x+50,position.y-10,position.z+20);
+          this.mesh.add(plat2c);
+          plat2cBox.position.set(position.x+50,position.y-10,position.z+20);
+          app.add(plat2cBox);
+          
+          plat3a.position.set(position.x+70,position.y-10,position.z+20);
+          this.mesh.add(plat3a);
+          plat3aBox.position.set(position.x+70,position.y-10,position.z+20);
+          app.add(plat3aBox);
+
+          plat3b.position.set(position.x+70,position.y-10,position.z-20);
+          this.mesh.add(plat3b);
+          plat3bBox.position.set(position.x+70,position.y-10,position.z-20);
+          app.add(plat3bBox);
+
+          plat4a.position.set(position.x+90,position.y-10,position.z-20);
+          this.mesh.add(plat4a);
+          plat4aBox.position.set(position.x+90,position.y-10,position.z-20);
+          app.add(plat4aBox);
+
+          plat4b.position.set(position.x+90,position.y-10,position.z);
+          this.mesh.add(plat4b);
+          plat4bBox.position.set(position.x+90,position.y-10,position.z);
+          app.add(plat4bBox);
+
+          plat4c.position.set(position.x+90,position.y-10,position.z+20);
+          this.mesh.add(plat4c);
+          plat4cBox.position.set(position.x+90,position.y-10,position.z+20);
+          app.add(plat4cBox);
+
+          plat5.position.set(position.x+110,position.y-10,position.z);
+          this.mesh.add(plat5);
+          plat5Box.position.set(position.x+110,position.y-10,position.z);
+          app.add(plat5Box);
+          
+          app.add(new Enemy({x:position.x+70,y:10,z:0},0));
+          app.add(new Enemy({x:position.x+70,y:10,z:0},1));
+          break;
+
+        case 1:
+          plat1.position.set(position.x+30,position.y-10,position.z+20);
+          this.mesh.add(plat1);
+          plat1Box.position.set(position.x+30,position.y-10,position.z+20);
+          app.add(plat1Box);
+
+          plat2a.position.set(position.x+50,position.y-10,position.z);
+          this.mesh.add(plat2a);
+          plat2aBox.position.set(position.x+50,position.y-10,position.z);
+          app.add(plat2aBox);
+
+          plat2b.position.set(position.x+50,position.y-10,position.z-20);
+          this.mesh.add(plat2b);
+          plat2bBox.position.set(position.x+50,position.y-10,position.z-20);
+          app.add(plat2bBox);
+
+          plat2c.position.set(position.x+50,position.y-10,position.z+20);
+          this.mesh.add(plat2c);
+          plat2cBox.position.set(position.x+50,position.y-10,position.z+20);
+          app.add(plat2cBox);
+
+          plat3b.position.set(position.x+70,position.y-10,position.z-20);
+          this.mesh.add(plat3b);
+          plat3bBox.position.set(position.x+70,position.y-10,position.z-20);
+          app.add(plat3bBox);
+
+          plat4a.position.set(position.x+90,position.y-10,position.z-20);
+          this.mesh.add(plat4a);
+          plat4aBox.position.set(position.x+90,position.y-10,position.z-20);
+          app.add(plat4aBox);
+
+          plat4b.position.set(position.x+90,position.y-10,position.z);
+          this.mesh.add(plat4b);
+          plat4bBox.position.set(position.x+90,position.y-10,position.z);
+          app.add(plat4bBox);
+
+          plat4c.position.set(position.x+90,position.y-10,position.z+20);
+          this.mesh.add(plat4c);
+          plat4cBox.position.set(position.x+90,position.y-10,position.z+20);
+          app.add(plat4cBox);
+
+          plat5.position.set(position.x+110,position.y-10,position.z+20);
+          this.mesh.add(plat5);
+          plat5Box.position.set(position.x+110,position.y-10,position.z+20);
+          app.add(plat5Box);
+
+          app.add(new Enemy({x:position.x+70,y:10,z:0},2));
+        break;
+
+        case 2:
+          plat1.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plat1);
+          plat1Box.position.set(position.x+30,position.y-10,position.z);
+          app.add(plat1Box);
+
+          plat2a.position.set(position.x+50,position.y-10,position.z);
+          plat2a.scale.z /= 3;
+          this.mesh.add(plat2a);
+          plat2aBox.position.set(position.x+50,position.y-10,position.z);
+          plat2aBox.scale.z /= 3;
+          app.add(plat2aBox);
+
+          plat3a.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(plat3a);
+          plat3aBox.position.set(position.x+70,position.y-10,position.z);
+          app.add(plat3aBox);
+
+          plat4a.position.set(position.x+90,position.y-10,position.z);
+          this.mesh.add(plat4a);
+          plat4aBox.position.set(position.x+90,position.y-10,position.z);
+          app.add(plat4aBox);
+
+          plat5.position.set(position.x+110,position.y-10,position.z+0);
+          this.mesh.add(plat5);
+          plat5Box.position.set(position.x+110,position.y-10,position.z+0);
+          app.add(plat5Box);
+
+          app.add(new Enemy({x:position.x+90,y:10,z:0},3));
+          app.add(new Enemy({x:position.x+50,y:10,z:0},4));
+          break;
+
+        case 3:
+          plat1.position.set(position.x+30,position.y-10,position.z+20);
+          this.mesh.add(plat1);
+          plat1Box.position.set(position.x+30,position.y-10,position.z+20);
+          app.add(plat1Box);
+
+          plat2a.position.set(position.x+50,position.y-10,position.z+20);
+          this.mesh.add(plat2a);
+          plat2aBox.scale.z /= 3;
+          plat2a.scale.z /= 3;
+          plat2aBox.position.set(position.x+50,position.y-10,position.z+20);
+          app.add(plat2aBox);
+
+          plat2b.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(plat2b);
+          plat2bBox.scale.z *= 3;
+          plat2b.scale.z *= 3;
+          plat2bBox.position.set(position.x+70,position.y-10,position.z);
+          app.add(plat2bBox);
+          
+          plat2c.position.set(position.x+60,position.y-10,position.z+20);
+          this.mesh.add(plat2c);
+          plat2cBox.position.set(position.x+60,position.y-10,position.z+20);
+          app.add(plat2cBox);
+
+          plat3a.position.set(position.x+70,position.y-10,position.z+20);
+          this.mesh.add(plat3a);
+          plat3aBox.scale.x /= 3;
+          plat3a.scale.x /= 3;
+          plat3aBox.position.set(position.x+70,position.y-10,position.z+20);
+          app.add(plat3aBox);
+          
+          plat3b.position.set(position.x+70,position.y-10,position.z-20);
+          this.mesh.add(plat3b);
+          plat3bBox.scale.x /= 3;
+          plat3b.scale.x /= 3;
+          plat3bBox.position.set(position.x+70,position.y-10,position.z-20);
+          app.add(plat3bBox);
+
+          plat4a.position.set(position.x+85,position.y-10,position.z-20);
+          this.mesh.add(plat4a);
+          plat4aBox.scale.x *= 2;
+          plat4a.scale.x *= 2;
+          plat4aBox.position.set(position.x+85,position.y-10,position.z-20);
+          app.add(plat4aBox);
+
+          plat5.position.set(position.x+110,position.y-10,position.z-20);
+          this.mesh.add(plat5);
+          plat5Box.position.set(position.x+110,position.y-10,position.z-20);
+          app.add(plat5Box);
+          app.add(new Enemy({x:position.x+70,y:10,z:0},5));
+          break;
+      }
+      this.mesh.castShadow = true;
+      this.mesh.recieveShadow = true;
+
+  }
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um segmento do mapa, este segmento possui seis versões.
+class Segment2 extends Obj{
+    constructor(position) {	
+      super();
+      this.material = Physijs.createMaterial(
+        floorMaterial,
+        0.6,
+        0.8
+      );
+      let plataBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      plataBox.visible = false;
+
+      let platb1Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platb1Box.visible = false;
+
+      let platb2Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platb2Box.visible = false;
+
+      let platb3Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platb3Box.visible = false;
+
+      let platc1Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platc1Box.visible = false;
+
+      let platc2Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platc2Box.visible = false;
+
+      let platc3Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platc3Box.visible = false;
+
+      let platd1Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platd1Box.visible = false;
+
+      let platd2Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platd2Box.visible = false;
+
+      let platd3Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      platd3Box.visible = false;
+      let plateBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,10),
+        this.material,  
+        0
+      );
+      plateBox.visible = false;
+
+      this.mesh = new THREE.Group();
+      let startBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+      ); 
+      startBox.position.set(position.x+5,position.y-10,position.z);
+      startBox.visible = false;
+      app.add(startBox);
+      let base_start = new THREE.Mesh(new THREE.BoxGeometry(20,30,50), floorMaterial);
+      base_start.position.set(position.x+5,position.y-10,position.z);
+      this.mesh.add(base_start);
+
+      let endBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+      ); 
+      endBox.position.set(position.x+135,position.y-10,position.z);
+      endBox.visible = false;
+      app.add(endBox);
+      let base_end = new THREE.Mesh(new THREE.BoxGeometry(20,30,50), floorMaterial);
+      base_end.position.set(position.x+135,position.y-10,position.z);
+      this.mesh.add(base_end);
+
+      let trapPlatform = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      trapPlatform.position.set(position.x+70,position.y-10,position.z);
+      this.mesh.add(trapPlatform);
+
+      let plata = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platb1 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platb2 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platb3 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platc1 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platc2 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platc3 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platd1 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platd2 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let platd3 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+      let plate = new THREE.Mesh(new THREE.BoxGeometry(10,30,10), floorMaterial);
+
+      this.path = Math.floor(Math.random()*6);
+
+      switch(this.path){
+        case 0:
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z+20},false,false));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z-20},true,false));
+          plataBox.position.set(position.x+30,position.y-10,position.z);
+          plataBox.scale.x *= 3;
+          plata.scale.x *= 3;
+          app.add(plataBox);
+          plata.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plata);
+
+          platb1Box.position.set(position.x+50,position.y-10,position.z-20);
+          app.add(platb1Box);
+          platb1.position.set(position.x+50,position.y-10,position.z-20);
+          this.mesh.add(platb1);
+
+          platb2Box.position.set(position.x+50,position.y-10,position.z);
+          platb2Box.scale.z *= 3;
+          platb2.scale.z *= 3;
+          app.add(platb2Box);
+          platb2.position.set(position.x+50,position.y-10,position.z);
+          this.mesh.add(platb2);
+          
+          platb3Box.position.set(position.x+50,position.y-10,position.z+20);
+          app.add(platb3Box);
+          platb3.position.set(position.x+50,position.y-10,position.z+20);
+          this.mesh.add(platb3);
+          
+          platc1Box.position.set(position.x+70,position.y-10,position.z-20);
+          platc1Box.scale.x *= 3;
+          platc1.scale.x *= 3;
+          app.add(platc1Box);
+          platc1.position.set(position.x+70,position.y-10,position.z-20);
+          this.mesh.add(platc1);
+          
+          platc2Box.position.set(position.x+70,position.y-10,position.z);
+          app.add(platc2Box);
+          platc2.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(platc2);
+
+          platc3Box.position.set(position.x+70,position.y-10,position.z+20);
+          platc3Box.scale.x *= 3;
+          platc3.scale.x *= 3;
+          app.add(platc3Box);
+          platc3.position.set(position.x+70,position.y-10,position.z+20);
+          this.mesh.add(platc3);
+          
+          platd1Box.position.set(position.x+90,position.y-10,position.z-20);
+          app.add(platd1Box);
+          platd1.position.set(position.x+90,position.y-10,position.z-20);
+          this.mesh.add(platd1);
+          
+          platd2Box.position.set(position.x+90,position.y-10,position.z);
+          platd2Box.scale.z *= 3;
+          platd2.scale.z *= 3;
+          app.add(platd2Box);
+          platd2.position.set(position.x+90,position.y-10,position.z);
+          this.mesh.add(platd2);
+
+          platd3Box.position.set(position.x+90,position.y-10,position.z+20);
+          app.add(platd3Box);
+          platd3.position.set(position.x+90,position.y-10,position.z+20);
+          this.mesh.add(platd3);
+          
+          plateBox.position.set(position.x+110,position.y-10,position.z);
+          plateBox.scale.x *= 3;
+          plate.scale.x *= 3;
+          app.add(plateBox);
+          plate.position.set(position.x+110,position.y-10,position.z);
+          this.mesh.add(plate);
+          break;
+        case 1:
+          app.add(new SpinningLog({x:position.x+50,y:position.y+25,z:position.z},false,false));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z+20},false,true));
+          app.add(new SpinningLog({x:position.x+90,y:position.y+25,z:position.z},true,false));
+          plataBox.position.set(position.x+30,position.y-10,position.z);
+          plataBox.scale.x *= 3;
+          plata.scale.x *= 3;
+          app.add(plataBox);
+          plata.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plata);
+
+          platb2Box.position.set(position.x+50,position.y-10,position.z+5);
+          platb2Box.scale.z *= 2;
+          platb2.scale.z *= 2;
+          app.add(platb2Box);
+          platb2.position.set(position.x+50,position.y-10,position.z+5);
+          this.mesh.add(platb2);
+          
+          platb3Box.position.set(position.x+50,position.y-10,position.z+20);
+          app.add(platb3Box);
+          platb3.position.set(position.x+50,position.y-10,position.z+20);
+          this.mesh.add(platb3);
+
+          platc2Box.position.set(position.x+70,position.y-10,position.z);
+          app.add(platc2Box);
+          platc2.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(platc2);
+
+          platc3Box.position.set(position.x+70,position.y-10,position.z+20);
+          platc3Box.scale.x *= 3;
+          platc3.scale.x *= 3;
+          app.add(platc3Box);
+          platc3.position.set(position.x+70,position.y-10,position.z+20);
+          this.mesh.add(platc3);
+
+          platd2Box.position.set(position.x+90,position.y-10,position.z+5);
+          platd2Box.scale.z *= 2;
+          platd2.scale.z *= 2;
+          app.add(platd2Box);
+          platd2.position.set(position.x+90,position.y-10,position.z+5);
+          this.mesh.add(platd2);
+
+          platd3Box.position.set(position.x+90,position.y-10,position.z+20);
+          app.add(platd3Box);
+          platd3.position.set(position.x+90,position.y-10,position.z+20);
+          this.mesh.add(platd3);
+          
+          plateBox.position.set(position.x+110,position.y-10,position.z);
+          plateBox.scale.x *= 3;
+          plate.scale.x *= 3;
+          app.add(plateBox);
+          plate.position.set(position.x+110,position.y-10,position.z);
+          this.mesh.add(plate);
+          break;
+        case 2:
+          app.add(new SpinningLog({x:position.x+50,y:position.y+25,z:position.z},true,false));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z-20},true,true));
+          app.add(new SpinningLog({x:position.x+90,y:position.y+25,z:position.z},false,false));
+          plataBox.position.set(position.x+30,position.y-10,position.z);
+          plataBox.scale.x *= 3;
+          plata.scale.x *= 3;
+          app.add(plataBox);
+          plata.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plata);
+
+          platb1Box.position.set(position.x+50,position.y-10,position.z-20);
+          app.add(platb1Box);
+          platb1.position.set(position.x+50,position.y-10,position.z-20);
+          this.mesh.add(platb1);
+          
+          platb2Box.position.set(position.x+50,position.y-10,position.z-5);
+          platb2Box.scale.z *= 2;
+          platb2.scale.z *= 2;
+          app.add(platb2Box);
+          platb2.position.set(position.x+50,position.y-10,position.z-5);
+          this.mesh.add(platb2);
+
+          platc1Box.position.set(position.x+70,position.y-10,position.z-20);
+          platc1Box.scale.x *= 3;
+          platc1.scale.x *= 3;
+          app.add(platc1Box);
+          platc1.position.set(position.x+70,position.y-10,position.z-20);
+          this.mesh.add(platc1);
+          
+          platc2Box.position.set(position.x+70,position.y-10,position.z);
+          app.add(platc2Box);
+          platc2.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(platc2);
+
+          platd1Box.position.set(position.x+90,position.y-10,position.z-20);
+          app.add(platd1Box);
+          platd1.position.set(position.x+90,position.y-10,position.z-20);
+          this.mesh.add(platd1);
+          
+          platd2Box.position.set(position.x+90,position.y-10,position.z-5);
+          platd2Box.scale.z *= 2;
+          platd2.scale.z *= 2;
+          app.add(platd2Box);
+          platd2.position.set(position.x+90,position.y-10,position.z-5);
+          this.mesh.add(platd2);
+
+          plateBox.position.set(position.x+110,position.y-10,position.z);
+          plateBox.scale.x *= 3;
+          plate.scale.x *= 3;
+          app.add(plateBox);
+          plate.position.set(position.x+110,position.y-10,position.z);
+          this.mesh.add(plate);
+          break;
+        case 3:
+          app.add(new SpinningLog({x:position.x+30,y:position.y+25,z:position.z},false,false));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z-20},false,true));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z+20},true,true));
+          app.add(new SpinningLog({x:position.x+110,y:position.y+25,z:position.z},true,false));
+          plataBox.position.set(position.x+30,position.y-10,position.z);
+          plataBox.scale.x *= 3;
+          plata.scale.x *= 3;
+          app.add(plataBox);
+          plata.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plata);
+
+          platb1Box.position.set(position.x+50,position.y-10,position.z-20);
+          app.add(platb1Box);
+          platb1.position.set(position.x+50,position.y-10,position.z-20);
+          this.mesh.add(platb1);
+          
+          platb2Box.position.set(position.x+50,position.y-10,position.z);
+          platb2Box.scale.z *= 3;
+          platb2.scale.z *= 3;
+          app.add(platb2Box);
+          platb2.position.set(position.x+50,position.y-10,position.z);
+          this.mesh.add(platb2);
+          
+          platb3Box.position.set(position.x+50,position.y-10,position.z+20);
+          app.add(platb3Box);
+          platb3.position.set(position.x+50,position.y-10,position.z+20);
+          this.mesh.add(platb3);
+          
+          platc1Box.position.set(position.x+70,position.y-10,position.z-20);
+          platc1Box.scale.x *= 3;
+          platc1.scale.x *= 3;
+          app.add(platc1Box);
+          platc1.position.set(position.x+70,position.y-10,position.z-20);
+          this.mesh.add(platc1);
+          
+          platc2Box.position.set(position.x+70,position.y-10,position.z);
+          app.add(platc2Box);
+          platc2.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(platc2);
+
+          platc3Box.position.set(position.x+70,position.y-10,position.z+20);
+          platc3Box.scale.x *= 3;
+          platc3.scale.x *= 3;
+          app.add(platc3Box);
+          platc3.position.set(position.x+70,position.y-10,position.z+20);
+          this.mesh.add(platc3);
+          
+          platd1Box.position.set(position.x+90,position.y-10,position.z-20);
+          app.add(platd1Box);
+          platd1.position.set(position.x+90,position.y-10,position.z-20);
+          this.mesh.add(platd1);
+          
+          platd2Box.position.set(position.x+90,position.y-10,position.z);
+          platd2Box.scale.z *= 3;
+          platd2.scale.z *= 3;
+          app.add(platd2Box);
+          platd2.position.set(position.x+90,position.y-10,position.z);
+          this.mesh.add(platd2);
+
+          platd3Box.position.set(position.x+90,position.y-10,position.z+20);
+          app.add(platd3Box);
+          platd3.position.set(position.x+90,position.y-10,position.z+20);
+          this.mesh.add(platd3);
+          
+          plateBox.position.set(position.x+110,position.y-10,position.z);
+          plateBox.scale.x *= 3;
+          plate.scale.x *= 3;
+          app.add(plateBox);
+          plate.position.set(position.x+110,position.y-10,position.z);
+          this.mesh.add(plate);
+          break;
+        case 4:
+          app.add(new SpinningLog({x:position.x+50,y:position.y+25,z:position.z},false,true));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z+20},true,true));
+          app.add(new SpinningLog({x:position.x+90,y:position.y+25,z:position.z},true,true));
+          plataBox.position.set(position.x+30,position.y-10,position.z);
+          plataBox.scale.x *= 3;
+          plata.scale.x *= 3;
+          app.add(plataBox);
+          plata.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plata);
+
+          platb2Box.position.set(position.x+50,position.y-10,position.z+5);
+          platb2Box.scale.z *= 2;
+          platb2.scale.z *= 2;
+          app.add(platb2Box);
+          platb2.position.set(position.x+50,position.y-10,position.z+5);
+          this.mesh.add(platb2);
+          
+          platb3Box.position.set(position.x+50,position.y-10,position.z+20);
+          app.add(platb3Box);
+          platb3.position.set(position.x+50,position.y-10,position.z+20);
+          this.mesh.add(platb3);
+
+          platc2Box.position.set(position.x+70,position.y-10,position.z);
+          app.add(platc2Box);
+          platc2.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(platc2);
+
+          platc3Box.position.set(position.x+70,position.y-10,position.z+20);
+          platc3Box.scale.x *= 3;
+          platc3.scale.x *= 3;
+          app.add(platc3Box);
+          platc3.position.set(position.x+70,position.y-10,position.z+20);
+          this.mesh.add(platc3);
+
+          platd2Box.position.set(position.x+90,position.y-10,position.z+5);
+          platd2Box.scale.z *= 2;
+          platd2.scale.z *= 2;
+          app.add(platd2Box);
+          platd2.position.set(position.x+90,position.y-10,position.z+5);
+          this.mesh.add(platd2);
+
+          platd3Box.position.set(position.x+90,position.y-10,position.z+20);
+          app.add(platd3Box);
+          platd3.position.set(position.x+90,position.y-10,position.z+20);
+          this.mesh.add(platd3);
+          
+          plateBox.position.set(position.x+110,position.y-10,position.z);
+          plateBox.scale.x *= 3;
+          plate.scale.x *= 3;
+          app.add(plateBox);
+          plate.position.set(position.x+110,position.y-10,position.z);
+          this.mesh.add(plate);
+          break;
+        case 5:
+          app.add(new SpinningLog({x:position.x+50,y:position.y+25,z:position.z},true,true));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z-20},true,true));
+          app.add(new SpinningLog({x:position.x+90,y:position.y+25,z:position.z},false,true));
+          plataBox.position.set(position.x+30,position.y-10,position.z);
+          plataBox.scale.x *= 3;
+          plata.scale.x *= 3;
+          app.add(plataBox);
+          plata.position.set(position.x+30,position.y-10,position.z);
+          this.mesh.add(plata);
+
+          platb1Box.position.set(position.x+50,position.y-10,position.z-20);
+          app.add(platb1Box);
+          platb1.position.set(position.x+50,position.y-10,position.z-20);
+          this.mesh.add(platb1);
+          
+          platb2Box.position.set(position.x+50,position.y-10,position.z-5);
+          platb2Box.scale.z *= 2;
+          platb2.scale.z *= 2;
+          app.add(platb2Box);
+          platb2.position.set(position.x+50,position.y-10,position.z-5);
+          this.mesh.add(platb2);
+
+          platc1Box.position.set(position.x+70,position.y-10,position.z-20);
+          platc1Box.scale.x *= 3;
+          platc1.scale.x *= 3;
+          app.add(platc1Box);
+          platc1.position.set(position.x+70,position.y-10,position.z-20);
+          this.mesh.add(platc1);
+          
+          platc2Box.position.set(position.x+70,position.y-10,position.z);
+          app.add(platc2Box);
+          platc2.position.set(position.x+70,position.y-10,position.z);
+          this.mesh.add(platc2);
+
+          platd1Box.position.set(position.x+90,position.y-10,position.z-20);
+          app.add(platd1Box);
+          platd1.position.set(position.x+90,position.y-10,position.z-20);
+          this.mesh.add(platd1);
+          
+          platd2Box.position.set(position.x+90,position.y-10,position.z-5);
+          platd2Box.scale.z *= 2;
+          platd2.scale.z *= 2;
+          app.add(platd2Box);
+          platd2.position.set(position.x+90,position.y-10,position.z-5);
+          this.mesh.add(platd2);
+
+          plateBox.position.set(position.x+110,position.y-10,position.z);
+          plateBox.scale.x *= 3;
+          plate.scale.x *= 3;
+          app.add(plateBox);
+          plate.position.set(position.x+110,position.y-10,position.z);
+          this.mesh.add(plate);
+          break;
+      }
+      this.mesh.castShadow = true;
+      this.mesh.recieveShadow = true;
+  }
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um segmento que tem quatro versões distintas.
+class Segment3 extends Obj{
+  constructor(position){
+    super();
+    this.mesh = new THREE.Group();
+    this.start = new THREE.Mesh(new THREE.BoxGeometry(20,30,50), floorMaterial);
+    this.start.position.set(position.x+5,position.y-10,position.z);
+    this.mesh.add(this.start);
+    this.material = Physijs.createMaterial(
+        floorMaterial,
+        0.6,
+        0.8
+    );
+
+    let startBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+    ); 
+      startBox.position.set(position.x+5,position.y-10,position.z);
+      startBox.visible = false;
+      app.add(startBox);
+
+    this.end = new THREE.Mesh(new THREE.BoxGeometry(20,30,50), floorMaterial);
+    this.end.position.set(position.x+185,position.y-10,position.z);
+    let endBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+    ); 
+      endBox.position.set(position.x+185,position.y-10,position.z);
+      endBox.visible = false;
+      app.add(endBox);
+
+    this.mesh.add(this.end);
+
+    this.path = Math.floor(Math.random()*4);
+    switch(this.path){
+      case 0:
+        let plata1 = new THREE.Mesh(new THREE.BoxGeometry(10,30,30),floorMaterial);
+        plata1.position.set(position.x+50,position.y-10,position.z);
+        this.mesh.add(plata1);
+        let plata1Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(10,30,30),
+          this.material,  
+          0
+        ); 
+        plata1Box.position.set(position.x+50,position.y-10,position.z);
+        plata1Box.visible = false;
+        app.add(plata1Box);
+
+        let plata2 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10),floorMaterial);
+        plata2.position.set(position.x+80,position.y-10,position.z);
+        this.mesh.add(plata2);
+        let plata2Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(10,30,10),
+          this.material,  
+          0
+        ); 
+        plata2Box.position.set(position.x+80,position.y-10,position.z);
+        plata2Box.visible = false;
+        app.add(plata2Box);
+
+        let plata3 = new THREE.Mesh(new THREE.BoxGeometry(10,30,10),floorMaterial);
+        plata3.position.set(position.x+110,position.y-10,position.z);
+        this.mesh.add(plata3);
+        let plata3Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(10,30,10),
+          this.material,  
+          0
+        ); 
+        plata3Box.position.set(position.x+110,position.y-10,position.z);
+        plata3Box.visible = false;
+        app.add(plata3Box);
+
+        let plata4 = new THREE.Mesh(new THREE.BoxGeometry(10,30,30),floorMaterial);
+        plata4.position.set(position.x+140,position.y-10,position.z);
+        this.mesh.add(plata4);
+        let plata4Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(10,30,30),
+          this.material,  
+          0
+        ); 
+        plata4Box.position.set(position.x+140,position.y-10,position.z);
+        plata4Box.visible = false;
+        app.add(plata4Box);
+
+        let plata5 = new THREE.Mesh(new THREE.BoxGeometry(30,30,10),floorMaterial);
+        plata5.position.set(position.x+30,position.y-10,position.z);
+        this.mesh.add(plata5);
+        let plata5Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(30,30,10),
+          this.material,  
+          0
+        ); 
+        plata5Box.position.set(position.x+30,position.y-10,position.z);
+        plata5Box.visible = false;
+        app.add(plata5Box);
+
+        let plata6 = new THREE.Mesh(new THREE.BoxGeometry(30,30,10),floorMaterial);
+        plata6.position.set(position.x+160,position.y-10,position.z);
+        this.mesh.add(plata6);
+        let plata6Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(30,30,10),
+          this.material,  
+          0
+        ); 
+        plata6Box.position.set(position.x+160,position.y-10,position.z);
+        plata6Box.visible = false;
+        app.add(plata6Box);
+
+        let plata7 = new THREE.Mesh(new THREE.BoxGeometry(80,30,10),floorMaterial);
+        plata7.position.set(position.x+95,position.y-10,position.z-10);
+        this.mesh.add(plata7);
+        let plata7Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(80,30,10),
+          this.material,  
+          0
+        ); 
+        plata7Box.position.set(position.x+95,position.y-10,position.z-10);
+        plata7Box.visible = false;
+        app.add(plata7Box);
+
+        let plata8 = new THREE.Mesh(new THREE.BoxGeometry(80,30,10),floorMaterial);
+        plata8.position.set(position.x+95,position.y-10,position.z+10);
+        this.mesh.add(plata8);
+        let plata8Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(80,30,10),
+          this.material,  
+          0
+        ); 
+        plata8Box.position.set(position.x+95,position.y-10,position.z+10);
+        plata8Box.visible = false;
+        app.add(plata8Box);
+
+        app.add(new Enemy({x:position.x+45,y:10,z:10},6));
+        app.add(new Enemy({x:position.x+135,y:10,z:-10},7));
+        break;
+      case 1:
+        let platb1 = new THREE.Mesh(new THREE.BoxGeometry(20,30,30),floorMaterial);
+          platb1.position.set(position.x+35,position.y-10,position.z);
+          this.mesh.add(platb1);
+          let platb1Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,30),
+            this.material,  
+            0
+          ); 
+          platb1Box.position.set(position.x+35,position.y-10,position.z);
+          platb1Box.visible = false;
+          app.add(platb1Box);
+
+          let platb2 = new THREE.Mesh(new THREE.BoxGeometry(20,30,20),floorMaterial);
+          platb2.position.set(position.x+65,position.y-10,position.z-15);
+          this.mesh.add(platb2);
+          let platb2Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,20),
+            this.material,  
+            0
+          ); 
+          platb2Box.position.set(position.x+65,position.y-10,position.z-15);
+          platb2Box.visible = false;
+          app.add(platb2Box);
+
+          let platb3 = new THREE.Mesh(new THREE.BoxGeometry(20,30,20),floorMaterial);
+          platb3.position.set(position.x+65,position.y-10,position.z+15);
+          this.mesh.add(platb3);
+          let platb3Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,20),
+            this.material,  
+            0
+          ); 
+          platb3Box.position.set(position.x+65,position.y-10,position.z+15);
+          platb3Box.visible = false;
+          app.add(platb3Box);
+
+          let platb4 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+          platb4.position.set(position.x+95,position.y-10,position.z-20);
+          this.mesh.add(platb4);
+          let platb4Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,10),
+            this.material,  
+            0
+          ); 
+          platb4Box.position.set(position.x+95,position.y-10,position.z-20);
+          platb4Box.visible = false;
+          app.add(platb4Box);
+
+          let platb5= new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+          platb5.position.set(position.x+95,position.y-10,position.z+20);
+          this.mesh.add(platb5);
+          let platb5Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,10),
+            this.material,  
+            0
+          ); 
+          platb5Box.position.set(position.x+95,position.y-10,position.z+20);
+          platb5Box.visible = false;
+          app.add(platb5Box);
+
+          let platb6 = new THREE.Mesh(new THREE.BoxGeometry(20,30,20),floorMaterial);
+          platb6.position.set(position.x+125,position.y-10,position.z-15);
+          this.mesh.add(platb6);
+          let platb6Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,20),
+            this.material,  
+            0
+          ); 
+          platb6Box.position.set(position.x+125,position.y-10,position.z-15);
+          platb6Box.visible = false;
+          app.add(platb6Box);
+
+          let platb7 = new THREE.Mesh(new THREE.BoxGeometry(20,30,20),floorMaterial);
+          platb7.position.set(position.x+125,position.y-10,position.z+15);
+          this.mesh.add(platb7);
+          let platb7Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,20),
+            this.material,  
+            0
+          ); 
+          platb7Box.position.set(position.x+125,position.y-10,position.z+15);
+          platb7Box.visible = false;
+          app.add(platb7Box);
+
+          let platb8 = new THREE.Mesh(new THREE.BoxGeometry(20,30,30),floorMaterial);
+          platb8.position.set(position.x+155,position.y-10,position.z);
+          this.mesh.add(platb8);
+          let platb8Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(20,30,30),
+            this.material,  
+            0
+          ); 
+          platb8Box.position.set(position.x+155,position.y-10,position.z);
+          platb8Box.visible = false;
+          app.add(platb8Box);
+
+          app.add(new SpinningLog({x:position.x+75,y:25,z:0},false,false));
+          app.add(new SpinningLog({x:position.x+115,y:25,z:0},true,false));
+        break;
+      case 2:
+        let platc1 = new THREE.Mesh(new THREE.BoxGeometry(160,30,10),floorMaterial);
+            platc1.position.set(position.x+95,position.y-10,position.z);
+            this.mesh.add(platc1);
+            let platc1Box = new Physijs.BoxMesh(
+              new THREE.BoxGeometry(160,30,10),
+              this.material,  
+              0
+            ); 
+            platc1Box.position.set(position.x+95,position.y-10,position.z);
+            platc1Box.visible = false;
+            app.add(platc1Box);
+
+            app.add(new SpinningLog({x:position.x+25,y:25,z:0},false,true));
+            app.add(new SpinningLog({x:position.x+75,y:25,z:0},true,true));
+            app.add(new SpinningLog({x:position.x+115,y:25,z:0},false,true));
+            app.add(new SpinningLog({x:position.x+165,y:25,z:0},true,true));
+        break;
+      case 3:
+        let platd1 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd1.position.set(position.x+25,position.y-10,position.z-10);
+        this.mesh.add(platd1);
+        let platd1Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd1Box.position.set(position.x+25,position.y-10,position.z-10);
+        platd1Box.visible = false;
+        app.add(platd1Box);
+
+        let platd2 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd2.position.set(position.x+55,position.y-10,position.z-10);
+        this.mesh.add(platd2);
+        let platd2Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd2Box.position.set(position.x+55,position.y-10,position.z-10);
+        platd2Box.visible = false;
+        app.add(platd2Box);
+
+        let platd3 = new THREE.Mesh(new THREE.BoxGeometry(30,30,10),floorMaterial);
+        platd3.position.set(position.x+90,position.y-10,position.z-10);
+        this.mesh.add(platd3);
+        let platd3Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(30,30,10),
+          this.material,  
+          0
+        ); 
+        platd3Box.position.set(position.x+90,position.y-10,position.z-10);
+        platd3Box.visible = false;
+        app.add(platd3Box);
+
+        let platd4 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd4.position.set(position.x+125,position.y-10,position.z-10);
+        this.mesh.add(platd4);
+        let platd4Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd4Box.position.set(position.x+125,position.y-10,position.z-10);
+        platd4Box.visible = false;
+        app.add(platd4Box);
+
+        let platd5 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd5.position.set(position.x+155,position.y-10,position.z-10);
+        this.mesh.add(platd5);
+        let platd5Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd5Box.position.set(position.x+155,position.y-10,position.z-10);
+        platd5Box.visible = false;
+        app.add(platd5Box);
+
+        let platd6 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd6.position.set(position.x+25,position.y-10,position.z+10);
+        this.mesh.add(platd6);
+        let platd6Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd6Box.position.set(position.x+25,position.y-10,position.z+10);
+        platd6Box.visible = false;
+        app.add(platd6Box);
+
+        let platd7 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd7.position.set(position.x+55,position.y-10,position.z+10);
+        this.mesh.add(platd7);
+        let platd7Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd7Box.position.set(position.x+55,position.y-10,position.z+10);
+        platd7Box.visible = false;
+        app.add(platd7Box);
+
+        let platd8 = new THREE.Mesh(new THREE.BoxGeometry(30,30,10),floorMaterial);
+        platd8.position.set(position.x+90,position.y-10,position.z+10);
+        this.mesh.add(platd8);
+        let platd8Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(30,30,10),
+          this.material,  
+          0
+        ); 
+        platd8Box.position.set(position.x+90,position.y-10,position.z+10);
+        platd8Box.visible = false;
+        app.add(platd8Box);
+
+        let platd9 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd9.position.set(position.x+125,position.y-10,position.z+10);
+        this.mesh.add(platd9);
+        let platd9Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd9Box.position.set(position.x+125,position.y-10,position.z+10);
+        platd9Box.visible = false;
+        app.add(platd9Box);
+
+        let platd10 = new THREE.Mesh(new THREE.BoxGeometry(20,30,10),floorMaterial);
+        platd10.position.set(position.x+155,position.y-10,position.z+10);
+        this.mesh.add(platd10);
+        let platd10Box = new Physijs.BoxMesh(
+          new THREE.BoxGeometry(20,30,10),
+          this.material,  
+          0
+        ); 
+        platd10Box.position.set(position.x+155,position.y-10,position.z+10);
+        platd10Box.visible = false;
+        app.add(platd10Box);
+
+        app.add(new Enemy({x:position.x+40,y:position.y+10,z:position.z},8));
+        app.add(new Enemy({x:position.x+110,y:position.y+10,z:position.z},9));
+        app.add(new SpinningLog({x:position.x+90,y:position.y+25,z:position.z},true,true));
+        break;
+    }
+  }
+
+  update(){}
+
+  getMesh(){
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um segmento sem obstáculos.
+class Checkpoint extends Obj{
+    constructor(position) {
+      let active = false;
+      super();
+      this.material = Physijs.createMaterial(
+        new THREE.MeshPhongMaterial({color: 'red'}),
+        0.6,
+        0.8
+      );
+
+      this.startBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,30),
+        this.material,  
+        0
+      );
+      this.middleBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(30,30,50),
+        this.material,  
+        0
+      );
+      this.endBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,30,30),
+        this.material,  
+        0
+      );
+      let spawn = new THREE.Vector3(position.x+20,position.y+10,position.z);
+
+      this.mesh = new THREE.Group();
+      let base_start = new THREE.Mesh(new THREE.BoxGeometry(10,30,30), floorMaterial);
+      base_start.position.set(position.x,position.y-10,position.z);
+      this.mesh.add(base_start);
+      this.startBox.position.set(position.x,position.y-10,position.z);
+      this.startBox.visible = false;
+      app.add(this.startBox);
+
+      let base_middle = new THREE.Mesh(new THREE.BoxGeometry(30,30,50), floorMaterial);
+      base_middle.position.set(position.x+20,position.y-10,position.z);
+      this.mesh.add(base_middle);
+      this.middleBox.position.set(position.x+20,position.y-10,position.z);
+      this.middleBox.visible = false;
+      app.add(this.middleBox);
+
+      let base_end = new THREE.Mesh(new THREE.BoxGeometry(10,30,30), floorMaterial);
+      base_end.position.set(position.x+40,position.y-10,position.z);
+      this.mesh.add(base_end);
+      this.endBox.position.set(position.x+40,position.y-10,position.z);
+      this.endBox.visible = false;
+      app.add(this.endBox);
+
+      this.mesh.castShadow = true;
+      this.mesh.recieveShadow = true;
+
+      //Ativa o checkpoint quando o jogador colide com o centro do checkpoint, quando isto ocorre as coordenadas do checkpoint do jogador são alteradas e as vidas perdidas do mesmo são recuperadas.
+      this.middleBox.addEventListener( 'collision', function(object) {
+        if(!active){
+          player.checkpoint = new THREE.Vector3(spawn.x,spawn.y,spawn.z);
+          player.lifes = 3;
+          active = true;
+        }	
+
+	});
+  }
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um segmento do mapa, este segmento incluí o modelo criado pela classe Bridge.
+class BridgeSegment extends Obj{
+    constructor(position) {	
+      super();
+      this.mesh = new THREE.Group();
+      this.material = Physijs.createMaterial(
+        floorMaterial,
+        0.6,
+        0.8
+      );
+      this.startBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+      );
+      this.startBox.position.set(position.x+5,position.y-10,position.z);
+      this.startBox.visible = false;
+      app.add(this.startBox);
+      let base_start = new THREE.Mesh(new THREE.BoxGeometry(20,30,50),floorMaterial);
+      base_start.position.set(position.x+5,position.y-10,position.z);
+      this.mesh.add(base_start);
+
+      this.endBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+      );
+      this.endBox.position.set(position.x+115,position.y-10,position.z);
+      this.endBox.visible = false;
+      app.add(this.endBox);
+      let base_end = new THREE.Mesh(new THREE.BoxGeometry(20,30,50),floorMaterial);
+      base_end.position.set(position.x+115,position.y-10,position.z);
+      this.mesh.add(base_end);
+      this.path = Math.floor(Math.random()*3);
+      this.mesh.add(new Bridge({x:position.x+20,y:position.y-1,z:position.z},this.path).getMesh());
+      switch(this.path){
+        case 0:
+          app.add(new Enemy({x:position.x+30,y:10,z:0},4));
+          app.add(new SpinningLog({x:position.x+60,y:position.y+25,z:position.z+20},false,true));
+          app.add(new SpinningLog({x:position.x+60,y:position.y+25,z:position.z-20},true,true));
+          app.add(new Enemy({x:position.x+90,y:10,z:0},3));
+          break;
+        case 1:
+          app.add(new SpinningLog({x:position.x+50,y:position.y+25,z:position.z+20},false,true));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z-20},true,true));
+          break;
+        case 2:
+          app.add(new Enemy({x:position.x+30,y:10,z:0},3));
+          app.add(new SpinningLog({x:position.x+50,y:position.y+25,z:position.z},false,true));
+          app.add(new SpinningLog({x:position.x+70,y:position.y+25,z:position.z},true,true));
+          app.add(new Enemy({x:position.x+90,y:10,z:0},4));
+          break;
+      }
+      this.mesh.castShadow = true;
+      this.mesh.recieveShadow = true;
+  }
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de ilhas ao longo do mapa, existem quatro ilhas distintas que podem ser geradas ou as ilhas podem não ser geradas.
+class Scenario extends Obj{
+  constructor(position){
+    super();
+    this.mesh = new THREE.Group();
+    this.path = Math.floor(Math.random()*5);
+    switch(this.path){
+      case 0:
+        let blockA1 = new THREE.Mesh(new THREE.BoxGeometry(70,40,70), floorMaterial);
+        blockA1.position.set(position.x,position.y-15,position.z);
+        this.mesh.add(blockA1);
+        let blockA2 = new THREE.Mesh(new THREE.BoxGeometry(30,40,50), floorMaterial);
+        blockA2.position.set(position.x+20,position.y+25,position.z+10);
+        this.mesh.add(blockA2);
+        let blockA3 = new THREE.Mesh(new THREE.BoxGeometry(40,30,20), floorMaterial);
+        blockA3.position.set(position.x-15,position.y+20,position.z+25);
+        this.mesh.add(blockA3);
+        let blockA4 = new THREE.Mesh(new THREE.BoxGeometry(20,10,20), floorMaterial);
+        blockA4.position.set(position.x,position.y+10,position.z+5);
+        this.mesh.add(blockA4);
+        let blockA5 = new THREE.Mesh(new THREE.BoxGeometry(10,40,10), floorMaterial);
+        blockA5.position.set(position.x-50,position.y-15,position.z+25);
+        this.mesh.add(blockA5);
+        let blockA6 = new THREE.Mesh(new THREE.BoxGeometry(7.5,10,7.5), floorMaterial);
+        blockA6.position.set(position.x-48.75,position.y+10,position.z+26.25);
+        this.mesh.add(blockA6);
+        let blockA7 = new THREE.Mesh(new THREE.BoxGeometry(10,40,10), floorMaterial);
+        blockA7.position.set(position.x-42,position.y-20,position.z+11);
+        this.mesh.add(blockA7);
+        let blockA8 = new THREE.Mesh(new THREE.BoxGeometry(7.5,5,7.5), floorMaterial);
+        blockA8.position.set(position.x-40.75,position.y+2.5,position.z+12.25);
+        this.mesh.add(blockA8);
+        let blockA9 = new THREE.Mesh(new THREE.BoxGeometry(7.5,40,7.5), floorMaterial);
+        blockA9.position.set(position.x-54,position.y-25,position.z+12);
+        this.mesh.add(blockA9);
+        let blockA10 = new THREE.Mesh(new THREE.BoxGeometry(5,2.5,5), floorMaterial);
+        blockA10.position.set(position.x-54,position.y-3.75,position.z+12);
+        this.mesh.add(blockA10);
+        let blockA11 = new THREE.Mesh(new THREE.BoxGeometry(50,40,20), floorMaterial);
+        blockA11.position.set(position.x,position.y-15,position.z+45);
+        this.mesh.add(blockA11);
+        let blockA12 = new THREE.Mesh(new THREE.BoxGeometry(10,40,10), floorMaterial);
+        blockA12.position.set(position.x-30,position.y-25,position.z+40);
+        this.mesh.add(blockA12);
+        this.mesh.add(new Platform({x:position.x-10,y:position.y+15,z:position.z+40}).getMesh());
+        this.mesh.add(new Platform({x:position.x,y:position.y+25,z:position.z+40}).getMesh());
+        break;
+      case 1:
+        let blockB1 = new THREE.Mesh(new THREE.BoxGeometry(110,70,20), floorMaterial);
+        blockB1.position.set(position.x,position.y+5,position.z+30);
+        this.mesh.add(blockB1);
+        let blockB2 = new THREE.Mesh(new THREE.BoxGeometry(20,40,20), floorMaterial);
+        blockB2.position.set(position.x+25,position.y-5,position.z+10);
+        this.mesh.add(blockB2);
+        let blockB3 = new THREE.Mesh(new THREE.BoxGeometry(20,30,20), floorMaterial);
+        blockB3.position.set(position.x+45,position.y-15,position.z+10);
+        this.mesh.add(blockB3);
+        let blockB4 = new THREE.Mesh(new THREE.BoxGeometry(30,30,30), floorMaterial);
+        blockB4.position.set(position.x,position.y-15,position.z+5);
+        this.mesh.add(blockB4);
+        this.mesh.add(new Port({x:position.x-100,y:position.y-5,z:position.z+5}).getMesh());
+        let blockB5 = new THREE.Mesh(new THREE.BoxGeometry(60,30,60), floorMaterial);
+        blockB5.position.set(position.x-135,position.y-15,position.z+10);
+        this.mesh.add(blockB5);
+        let blockB6 = new THREE.Mesh(new THREE.BoxGeometry(20,30,20), floorMaterial);
+        blockB6.position.set(position.x-115,position.y+15,position.z+30);
+        this.mesh.add(blockB6);
+        let blockB7 = new THREE.Mesh(new THREE.BoxGeometry(10,20,10), floorMaterial);
+        blockB7.position.set(position.x-160,position.y+10,position.z+35);
+        this.mesh.add(blockB7);
+        let blockB8 = new THREE.Mesh(new THREE.BoxGeometry(90,30,50), floorMaterial);
+        blockB8.position.set(position.x,position.y-15,position.z+65);
+        this.mesh.add(blockB8);
+        this.mesh.add(new Platform({x:position.x-140,y:position.y,z:position.z+55}).getMesh());
+        this.mesh.add(new Platform({x:position.x-140,y:position.y,z:position.z+75}).getMesh());
+        this.mesh.add(new Platform({x:position.x-120,y:position.y,z:position.z+75}).getMesh());
+        this.mesh.add(new Platform({x:position.x-100,y:position.y,z:position.z+75}).getMesh());
+        this.mesh.add(new Platform({x:position.x-80,y:position.y,z:position.z+75}).getMesh());
+        this.mesh.add(new Platform({x:position.x-60,y:position.y,z:position.z+75}).getMesh());
+        this.mesh.add(new Platform({x:position.x-30,y:position.y+10,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x-20,y:position.y+20,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x,y:position.y+20,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x+10,y:position.y+30,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x+10,y:position.y+10,z:position.z+15}).getMesh());
+        break;
+      case 2:
+        let blockC1 = new THREE.Mesh(new THREE.BoxGeometry(110,30,110), floorMaterial);
+        blockC1.position.set(position.x,position.y-15,position.z);
+        this.mesh.add(blockC1);
+        let blockC2 = new THREE.Mesh(new THREE.BoxGeometry(80,40,80), floorMaterial);
+        blockC2.position.set(position.x,position.y+20,position.z);
+        this.mesh.add(blockC2);
+        let blockC3 = new THREE.Mesh(new THREE.BoxGeometry(40,50,40), floorMaterial);
+        blockC3.position.set(position.x+20,position.y+65,position.z);
+        this.mesh.add(blockC3);
+        this.mesh.add(new Platform({x:position.x+15,y:position.y+20,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x+25,y:position.y+30,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x+35,y:position.y+20,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x-25,y:position.y+10,z:position.z+45}).getMesh());
+        this.mesh.add(new Platform({x:position.x-45,y:position.y+20,z:position.z+15}).getMesh());
+        this.mesh.add(new Platform({x:position.x-45,y:position.y+30,z:position.z+25}).getMesh());
+        this.mesh.add(new Platform({x:position.x+25,y:position.y+10,z:position.z-45}).getMesh());
+        this.mesh.add(new Platform({x:position.x-35,y:position.y+40,z:position.z-45}).getMesh());
+        this.mesh.add(new Platform({x:position.x-25,y:position.y+30,z:position.z-45}).getMesh());
+        this.mesh.add(new Platform({x:position.x-5,y:position.y+60,z:position.z+5}).getMesh());
+        this.mesh.add(new Platform({x:position.x-5,y:position.y+80,z:position.z-5}).getMesh());
+        break;
+      case 3:
+        let blockD1 = new THREE.Mesh(new THREE.BoxGeometry(20,50,20), floorMaterial);
+        blockD1.position.set(position.x+20,position.y+5,position.z);
+        this.mesh.add(blockD1);
+        let blockD2 = new THREE.Mesh(new THREE.BoxGeometry(20,50,20), floorMaterial);
+        blockD2.position.set(position.x-20,position.y+5,position.z);
+        this.mesh.add(blockD2);
+        let blockD3 = new THREE.Mesh(new THREE.BoxGeometry(65,25,25), floorMaterial);
+        blockD3.position.set(position.x,position.y+40,position.z);
+        this.mesh.add(blockD3);
+        let blockD4 = new THREE.Mesh(new THREE.BoxGeometry(25,20,25), floorMaterial);
+        blockD4.position.set(position.x+20,position.y-5,position.z);
+        this.mesh.add(blockD4);
+        let blockD5 = new THREE.Mesh(new THREE.BoxGeometry(25,20,25), floorMaterial);
+        blockD5.position.set(position.x-20,position.y-5,position.z);
+        this.mesh.add(blockD5);
+        let blockD6 = new THREE.Mesh(new THREE.BoxGeometry(10,40,10), floorMaterial);
+        blockD6.position.set(position.x-40,position.y-15,position.z+25);
+        this.mesh.add(blockD6);
+        let blockD7 = new THREE.Mesh(new THREE.BoxGeometry(7.5,10,7.5), floorMaterial);
+        blockD7.position.set(position.x-38.75,position.y+10,position.z+23.7);
+        this.mesh.add(blockD7);
+        let blockD8 = new THREE.Mesh(new THREE.BoxGeometry(10,40,10), floorMaterial);
+        blockD8.position.set(position.x-42,position.y-20,position.z+11);
+        this.mesh.add(blockD8);
+        break;
+      case 4:
+        //Não gera uma ilha, para criar mais variedade no mapa.
+        break;
+    }
+  }
+
+  update(){}
+
+  getMesh(){
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um segmento no mapa, esta secção corresponde ao fim do mapa.
+class End extends Obj{
+    constructor(position) {	
+      super();
+      this.mesh = new THREE.Group();
+      this.material = Physijs.createMaterial(
+        floorMaterial,
+        0.6,
+        0.8
+      );
+      this.baseBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(50,30,50),
+        this.material,  
+        0
+      );
+      let base = new THREE.Mesh(new THREE.BoxGeometry(50,30,50), floorMaterial);
+      base.position.set(position.x+20,position.y-10,position.z);
+      this.mesh.add(base);
+      this.baseBox.position.set(position.x+20,position.y-10,position.z);
+      this.baseBox.visible = false;
+      app.add(this.baseBox);
+      this.mesh.add(new Port({x:position.x+50,y:position.y-10,z:position.z}).getMesh());
+      this.mesh.castShadow = true;
+      this.mesh.recieveShadow = true;
+      new LoaderGLTF({x:position.x+90,y:position.y+4.4,z:position.z+35},{x:0,y:Math.PI/2,z:0},{x:35,y:30,z:35},'imports/boat_model/scene.gltf');
+      
+      //Quando o jogador colide com o inicio deste segmento, a condição de vitória é ativada e o jogo termina.
+      this.baseBox.addEventListener( 'collision', function(object) {
+        player.victory = true;	
+	    }); 
+    }
+
+    update() {}
+
+    getMesh() {
+      return this.mesh;
+    }
+}
+
+//Classe associada à criação de uma ponte, um modelo composto; a ponte possui três versões distintas.
+class Bridge extends Obj{
+    constructor(position,path) {	
+      super();
+      this.mesh = new THREE.Group();
+      this.material1 = Physijs.createMaterial(
+        platMaterial,
+        0.6,
+        0.8
+      );
+      this.material2 = Physijs.createMaterial(
+        platMaterialSide,
+        0.6,
+        0.8
+      );
+      this.startBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(20,30,50),
+        this.material,  
+        0
+      );
+      this.path = path;
+
+      this.sup1Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,30,20),
+        this.material2,  
+        0
+      );
+      this.sup1Box.position.set(position.x-5,position.y-10,position.z-14.5);
+      app.add(this.sup1Box);
+      this.sup1Box.visible = false;
+      let sup1 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,20), platMaterialSide);
+      sup1.position.set(position.x-5,position.y-10,position.z-14.5);
+      this.mesh.add(sup1);
+
+      this.sup2Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,30,20),
+        this.material2,  
+        0
+      );
+      this.sup2Box.position.set(position.x-5,position.y-10,position.z-14.5);
+      this.sup2Box.visible = false;
+      app.add(this.sup2Box);
+      let sup2 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,20), platMaterialSide);
+      sup2.position.set(position.x-5,position.y-10,position.z+14.5);
+      this.mesh.add(sup2);
+
+      this.sup3Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,30,20),
+        this.material2,  
+        0
+      );
+      this.sup3Box.position.set(position.x+85,position.y-10,position.z-14.5);
+      this.sup3Box.visible = false;
+      app.add(this.sup3Box);
+      let sup3 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,20), platMaterialSide);
+      sup3.position.set(position.x+85,position.y-10,position.z-14.5);
+      this.mesh.add(sup3);
+
+      this.sup4Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,30,20),
+        this.material2,  
+        0
+      );
+      this.sup4Box.position.set(position.x+85,position.y-10,position.z+14.5);
+      this.sup4Box.visible = false;
+      app.add(this.sup4Box);
+      let sup4 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,20), platMaterialSide);
+      sup4.position.set(position.x+85,position.y-10,position.z+14.5);
+      this.mesh.add(sup4);
+
+      this.side1Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,29,20),
+        this.material2,  
+        0
+      );
+      this.side1Box.position.set(position.x+85,position.y+5,position.z);
+      this.side1Box.rotation.x = Math.PI/2;
+      this.side1Box.visible = false;
+      app.add(this.side1Box);
+      let side1 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,29,20), platMaterialSide);
+      side1.rotation.x = Math.PI/2;
+      side1.position.set(position.x+85,position.y+5,position.z);
+      this.mesh.add(side1);
+
+      this.side2Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,29,20),
+        this.material2,  
+        0
+      );
+      this.side2Box.position.set(position.x-5,position.y+5,position.z);
+      this.side2Box.rotation.x = Math.PI/2;
+      this.side2Box.visible = false;
+      app.add(this.side2Box);
+      let side2 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,29,20), platMaterialSide);
+      side2.rotation.x = Math.PI/2;
+      side2.position.set(position.x-5,position.y+5,position.z);
+      this.mesh.add(side2);
+
+      this.side3Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,90,20),
+        this.material2,  
+        0
+      );
+      this.side3Box.position.set(position.x+40,position.y+5,position.z-14.5);
+      this.side3Box.rotation.x = Math.PI/2;
+      this.side3Box.rotation.z = Math.PI/2;
+      this.side3Box.visible = false;
+      app.add(this.side3Box);
+      let side3 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,90,20), platMaterialSide);
+      side3.rotation.x = Math.PI/2;
+      side3.rotation.z = Math.PI/2;
+      side3.position.set(position.x+40,position.y+5,position.z-14.5);
+      this.mesh.add(side3);
+
+      this.side4Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,90,20),
+        this.material2,  
+        0
+      );
+      this.side4Box.position.set(position.x+40,position.y+5,position.z+14.5);
+      this.side4Box.rotation.x = Math.PI/2;
+      this.side4Box.rotation.z = Math.PI/2;
+      this.side4Box.visible = false;
+      app.add(this.side4Box);
+      let side4 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,90,20), platMaterialSide);
+      side4.rotation.x = Math.PI/2;
+      side4.rotation.z = Math.PI/2;
+      side4.position.set(position.x+40,position.y+5,position.z+14.5);
+      this.mesh.add(side4);
+
+      this.corner1Box = new Physijs.SphereMesh(
+        new THREE.SphereGeometry(1,20,20),
+        this.material2,  
+        0
+      );
+      this.corner1Box.position.set(position.x-5,position.y+5,position.z-14.5);
+      this.corner1Box.visible = false;
+      app.add(this.corner1Box);
+      let corner1 = new THREE.Mesh(new THREE.SphereGeometry(1,20,20), platMaterialSide);
+      corner1.position.set(position.x-5,position.y+5,position.z-14.5);
+      this.mesh.add(corner1);
+
+      this.corner2Box = new Physijs.SphereMesh(
+        new THREE.SphereGeometry(1,20,20),
+        this.material2,  
+        0
+      );
+      this.corner2Box.position.set(position.x-5,position.y+5,position.z+14.5);
+      this.corner2Box.visible = false;
+      app.add(this.corner2Box);
+      let corner2 = new THREE.Mesh(new THREE.SphereGeometry(1,20,20), platMaterialSide);
+      corner2.position.set(position.x-5,position.y+5,position.z+14.5);
+      this.mesh.add(corner2);
+
+      this.corner3Box = new Physijs.SphereMesh(
+        new THREE.SphereGeometry(1,20,20),
+        this.material2,  
+        0
+      );
+      this.corner3Box.position.set(position.x+85,position.y+5,position.z-14.5);
+      this.corner3Box.visible = false;
+      app.add(this.corner3Box);
+      let corner3 = new THREE.Mesh(new THREE.SphereGeometry(1,20,20), platMaterialSide);
+      corner3.position.set(position.x+85,position.y+5,position.z-14.5);
+      this.mesh.add(corner3);
+
+      this.corner4Box = new Physijs.SphereMesh(
+        new THREE.SphereGeometry(1,20,20),
+        this.material2,  
+        0
+      );
+      this.corner4Box.position.set(position.x+85,position.y+5,position.z+14.5);
+      this.corner4Box.visible = false;
+      app.add(this.corner4Box);
+      let corner4 = new THREE.Mesh(new THREE.SphereGeometry(1,20,20), platMaterialSide);
+      corner4.position.set(position.x+85,position.y+5,position.z+14.5);
+      this.mesh.add(corner4);
+
+      this.platStartBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,1,29),
+        this.material1,  
+        0
+      );
+      this.platStartBox.position.set(position.x,position.y+5,position.z);
+      let platStart = new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      platStart.position.set(position.x,position.y+5,position.z);
+
+      this.platEndBox = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,1,29),
+        this.material1,  
+        0
+      );
+      this.platEndBox.position.set(position.x+80,position.y+5,position.z);
+      let platEnd = new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      platEnd.position.set(position.x+80,position.y+5,position.z);
+
+      this.plat1Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,1,29),
+        this.material1,  
+        0
+      );
+      this.plat1Box.position.set(position.x+20,position.y+5,position.z);
+      let plat1 = new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      plat1.position.set(position.x+20,position.y+5,position.z);
+
+      this.plat2Box = new Physijs.BoxMesh(
+        new THREE.BoxGeometry(10,1,29),
+        this.material1,  
+        0
+      );
+      this.plat2Box.position.set(position.x+60,position.y+5,position.z);
+      let plat2= new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      plat2.position.set(position.x+60,position.y+5,position.z);          
+      
+      switch(this.path){
+        case 0:
+          this.baseBox = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(90,1,29),
+            this.material1,  
+            0
+          );
+          this.baseBox.position.set(position.x+40,position.y+5,position.z);
+          this.baseBox.visible = false;
+          app.add(this.baseBox);
+          let base = new THREE.Mesh(new THREE.BoxGeometry(90,1,29), platMaterial);
+          base.position.set(position.x+40,position.y+5,position.z);
+          this.mesh.add(base);
+          break;
+        case 1:
+          this.mesh.add(plat1);
+          this.plat1Box.visible = false;
+          app.add(this.plat1Box);
+
+          this.mesh.add(plat2);
+          this.plat2Box.visible = false;
+          app.add(this.plat2Box);
+
+          this.plat3Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(10,1,29),
+            this.material1,  
+            0
+          );
+          this.plat3Box.position.set(position.x+40,position.y+5,position.z);
+          this.plat3Box.visible = false;
+          app.add(this.plat3Box);
+          let plat3 = new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+          plat3.position.set(position.x+40,position.y+5,position.z);
+          this.mesh.add(plat3);
+
+          this.platStartBox.visible = false;
+          app.add(this.platStartBox);
+          this.mesh.add(platStart);
+
+          this.platEndBox.visible = false;
+          app.add(this.platEndBox);
+          this.mesh.add(platEnd);
+
+          break;
+        case 2:
+          this.plat4Box = new Physijs.BoxMesh(
+            new THREE.BoxGeometry(30,1,10),
+            this.material1,  
+            0
+          );
+          this.plat4Box.position.set(position.x+40,position.y+5,position.z);
+          this.plat4Box.visible = false;
+          app.add(this.plat4Box);
+          let plat4 = new THREE.Mesh(new THREE.BoxGeometry(30,1,10), platMaterial);
+          plat4.position.set(position.x+40,position.y+5,position.z);
+          this.mesh.add(plat4);
+
+          this.plat1Box.visible = false;
+          app.add(this.plat1Box);
+          this.mesh.add(plat1);
+
+          this.plat2Box.visible = false;
+          app.add(this.plat2Box);
+          this.mesh.add(plat2);
+
+          this.platStartBox.visible = false;
+          app.add(this.platStartBox);
+          this.mesh.add(platStart);
+
+          this.platEndBox.visible = false;
+          app.add(this.platEndBox);
+          this.mesh.add(platEnd);
+          break;
+      }
+  }
+
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de um 'porto', um objeto composto.
+class Port extends Obj{
+  constructor(position) {	
+      super();
+      this.mesh = new THREE.Group();
+      let supA1 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supA1.position.set(position.x-5,position.y-10,position.z-14.5);
+      this.mesh.add(supA1);
+      let supA2 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supA2.position.set(position.x-5,position.y-10,position.z+14.5);
+      this.mesh.add(supA2);
+      let supB1 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supB1.position.set(position.x+85,position.y-10,position.z-14.5);
+      this.mesh.add(supB1);
+      let supB2 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supB2.position.set(position.x+85,position.y-10,position.z+14.5);
+      this.mesh.add(supB2);
+      let supC1 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supC1.position.set(position.x+55,position.y-10,position.z-14.5);
+      this.mesh.add(supC1);
+      let supC2 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supC2.position.set(position.x+55,position.y-10,position.z+14.5);
+      this.mesh.add(supC2);
+      let supD1 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supD1.position.set(position.x+25,position.y-10,position.z-14.5);
+      this.mesh.add(supD1);
+      let supD2 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,30,32), platMaterialSide);
+      supD2.position.set(position.x+25,position.y-10,position.z+14.5);
+      this.mesh.add(supD2);
+      let side1 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,29,32), platMaterialSide);
+      side1.rotation.x = Math.PI/2;
+      side1.position.set(position.x+85,position.y+5,position.z);
+      this.mesh.add(side1);
+      let side2 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,29,32), platMaterialSide);
+      side2.rotation.x = Math.PI/2;
+      side2.position.set(position.x-5,position.y+5,position.z);
+      this.mesh.add(side2);
+      let side3 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,90,32), platMaterialSide);
+      side3.rotation.x = Math.PI/2;
+      side3.rotation.z = Math.PI/2;
+      side3.position.set(position.x+40,position.y+5,position.z-14.5);
+      this.mesh.add(side3);
+      let side4 = new THREE.Mesh(new THREE.CylinderGeometry(1,1,90,32), platMaterialSide);
+      side4.rotation.x = Math.PI/2;
+      side4.rotation.z = Math.PI/2;
+      side4.position.set(position.x+40,position.y+5,position.z+14.5);
+      this.mesh.add(side4);
+      let corner1 = new THREE.Mesh(new THREE.SphereGeometry(1,32,32), platMaterialSide);
+      corner1.position.set(position.x-5,position.y+5,position.z-14.5);
+      this.mesh.add(corner1);
+      let corner2 = new THREE.Mesh(new THREE.SphereGeometry(1,32,32), platMaterialSide);
+      corner2.position.set(position.x-5,position.y+5,position.z+14.5);
+      this.mesh.add(corner2);
+      let corner3 = new THREE.Mesh(new THREE.SphereGeometry(1,32,32), platMaterialSide);
+      corner3.position.set(position.x+85,position.y+5,position.z-14.5);
+      this.mesh.add(corner3);
+      let corner4 = new THREE.Mesh(new THREE.SphereGeometry(1,32,32), platMaterialSide);
+      corner4.position.set(position.x+85,position.y+5,position.z+14.5);
+      this.mesh.add(corner4);
+      let platStart = new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      platStart.position.set(position.x,position.y+5,position.z);
+
+      let platEnd = new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      platEnd.position.set(position.x+80,position.y+5,position.z);
+      let plat1 = new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      plat1.position.set(position.x+20,position.y+5,position.z);
+      let plat2= new THREE.Mesh(new THREE.BoxGeometry(10,1,29), platMaterial);
+      plat2.position.set(position.x+60,position.y+5,position.z);          
+      this.path = Math.floor(Math.random()*3);
+
+      let base = new THREE.Mesh(new THREE.BoxGeometry(90,1,29), platMaterial);
+      base.position.set(position.x+40,position.y+5,position.z);
+      this.mesh.add(base);
+    }
+
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação do mapa.
+//Os segmentos são adicionados ao mapa aleatoriamente, sempre que a aplicação é iniciada o percurso presente no mapa é diferente.
+class Map extends Obj{
+  constructor(position) {	
+      super();
+      this.mesh = new THREE.Group();
+      this.mesh.add(new Start({x:0,y:0,z:0}).getMesh());
+      let size = 130; //Representa o tamanho atual do mapa
+      let prev = 0;
+      let counter = 0;
+      for(let i = 0; i<12;i++){
+        this.path = Math.floor(Math.random()*4);
+        while(this.path === prev){
+            this.path = Math.floor(Math.random()*4);}
+        if(counter === 2){this.path = -1;}
+        if(i === 11){this.path = 4;}
+        switch (this.path){
+          case 0:
+            this.mesh.add(new Segment1({x:size,y:0,z:0}).getMesh());
+            size +=150
+            prev=0;
+            counter++;
+            break;
+          case 1:
+            this.mesh.add(new Segment2({x:size,y:0,z:0}).getMesh());
+            size +=150
+            prev=1;
+            counter++;
+            break;
+          case 2:
+            this.mesh.add(new BridgeSegment({x:size,y:0,z:0}).getMesh());
+            size +=130
+            prev=2;
+            counter++;
+            break;
+          case 3:
+            this.mesh.add(new Segment3({x:size,y:0,z:0}).getMesh());
+            size +=200
+            prev=3;
+            counter++;
+            break;
+          case 4:
+            this.mesh.add(new End({x:size,y:0,z:0}).getMesh());
+            break;
+          default:
+            this.mesh.add(new Checkpoint({x:size,y:0,z:0}).getMesh());
+            size +=50
+            counter = 0;
+            break;
+          
+        }
+      }
+      
+  }
+
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada à criação de uma plataforma, um objeto composto.
+class Platform extends Obj{
+  constructor(position) {	
+      super();
+      this.mesh = new THREE.Group();
+      let base = new THREE.Mesh(new THREE.BoxGeometry(8.8,1,8.8),platMaterial);
+      base.position.set(position.x,position.y,position.z);
+      this.mesh.add(base);
+
+      let corner1 = new THREE.Mesh(new THREE.SphereGeometry(0.8,20,20),platMaterialSide);
+      corner1.position.set(position.x-4,position.y,position.z-4);
+      this.mesh.add(corner1);
+
+      let corner2 = new THREE.Mesh(new THREE.SphereGeometry(0.8,20,20),platMaterialSide);
+      corner2.position.set(position.x+4,position.y,position.z+4);
+      this.mesh.add(corner2);
+
+      let corner3 = new THREE.Mesh(new THREE.SphereGeometry(0.8,20,20),platMaterialSide);
+      corner3.position.set(position.x+4,position.y,position.z-4);
+      this.mesh.add(corner3);
+
+      let corner4 = new THREE.Mesh(new THREE.SphereGeometry(0.8,20,20),platMaterialSide);
+      corner4.position.set(position.x-4,position.y,position.z+4);
+      this.mesh.add(corner4);
+
+      let side1 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,8,20),platMaterialSide);
+      side1.position.set(position.x+4,position.y,position.z);
+      side1.rotation.x = Math.PI/2;
+      this.mesh.add(side1);
+
+      let side2 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,8,20),platMaterialSide);
+      side2.position.set(position.x-4,position.y,position.z);
+      side2.rotation.x = Math.PI/2;
+      this.mesh.add(side2);
+
+      let side3 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,8,20),platMaterialSide);
+      side3.position.set(position.x,position.y,position.z+4);
+      side3.rotation.x = Math.PI/2;
+      side3.rotation.z = Math.PI/2;
+      this.mesh.add(side3);
+
+      let side4 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,8,20),platMaterialSide);
+      side4.position.set(position.x,position.y,position.z-4);
+      side4.rotation.x = Math.PI/2;
+      side4.rotation.z = Math.PI/2;
+      this.mesh.add(side4);
+
+      let sup1 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,60,20),platMaterialSide);
+      sup1.position.set(position.x+4,position.y-30,position.z+4);
+      this.mesh.add(sup1);
+
+      let sup2 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,60,20),platMaterialSide);
+      sup2.position.set(position.x-4,position.y-30,position.z+4);
+      this.mesh.add(sup2);
+
+      let sup3 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,60,20),platMaterialSide);
+      sup3.position.set(position.x+4,position.y-30,position.z-4);
+      this.mesh.add(sup3);
+
+      let sup4 = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,60,20),platMaterialSide);
+      sup4.position.set(position.x-4,position.y-30,position.z-4);
+      this.mesh.add(sup4);
+    }
+
+  update() {}
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Classe associada á criação de um obstáculo.
+class SpinningLog extends Obj{
+  constructor(position,trajectory,doubleLog){
+    super();
+    this.trajectory = trajectory;
+    this.doubleLog = doubleLog;
+    this.material = Physijs.createMaterial(
+        concreteMaterial,
+        0.6,
+        0.8
+    );
+    this.center = new Physijs.SphereMesh(
+        new THREE.SphereGeometry(3,20,20),
+        this.material,  
+        0
+    );
+    this.center.castShadow = true;
+    this.center.recieveShadow = true;
+
+    //Verifica se o jogador colidiu com um objeto da classe SpinningLog, caso isto ocorra o jogador é colocado na posição do último ponto de controlo ativo, uma vida é removida do mesmo e as suas velocidades linear e angular são colocadas a 0 em todos os eixos.
+    this.center.addEventListener( 'collision', function(object) {
+        object.__dirtyPosition = true;
+        if(object.mass > 0){
+          if(player.lifes>0) player.lifes--;
+          object.position.set(player.checkpoint.x,player.checkpoint.y,player.checkpoint.z);
+          object.setLinearVelocity(new THREE.Vector3(0,0,0));
+          object.setAngularVelocity( new THREE.Vector3(0,0,0) );
+        }
+      });
+
+    this.log1Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,40,20),
+        this.material,  
+        0
+    );
+    this.log1Box.castShadow = true;
+    this.log1Box.recieveShadow = true;
+
+    //Verifica se o jogador colidiu com um objeto da classe SpinningLog, caso isto ocorra o jogador é colocado na posição do último ponto de controlo ativo, uma vida é removida do mesmo e as suas velocidades linear e angular são colocadas a 0 em todos os eixos.
+    this.log1Box.addEventListener( 'collision', function(object) {	
+        object.__dirtyPosition = true;
+        if(object.mass > 0){
+          if(player.lifes>0) player.lifes--;
+          object.position.set(player.checkpoint.x,player.checkpoint.y,player.checkpoint.z);
+          object.setLinearVelocity(new THREE.Vector3(0,0,0));
+        }
+      });
+
+    this.log2Box = new Physijs.CylinderMesh(
+        new THREE.CylinderGeometry(1,1,40,20),
+        this.material,  
+        0
+    );
+    this.log2Box.castShadow = true;
+    this.log2Box.recieveShadow = true;
+    //Verifica se o jogador colidiu com um objeto da classe SpinningLog, caso isto ocorra o jogador é colocado na posição do último ponto de controlo ativo, uma vida é removida do mesmo e as suas velocidades linear e angular são colocadas a 0 em todos os eixos.
+    this.log2Box.addEventListener( 'collision', function(object) {
+        object.__dirtyPosition = true;
+        if(object.mass > 0){
+          if(player.lifes>0) player.lifes--;
+          object.position.set(player.checkpoint.x,player.checkpoint.y,player.checkpoint.z);
+          object.setLinearVelocity(new THREE.Vector3(0,0,0));
+        }
+      });
+
+    this.center.__dirtyPosition = true;
+    this.center.position.set(position.x,position.y,position.z);
+
+    this.log1Box.__dirtyRotation = true;
+    this.log1Box.__dirtyPosition = true;
+    this.log1Box.position.set(position.x,position.y,position.z);
+    app.add(this.log1Box);
+
+    if(this.doubleLog){
+      this.log2Box.__dirtyRotation = true;
+      this.log2Box.__dirtyPosition = true;
+      this.log2Box.position.set(position.x,position.y,position.z);
+      this.log2Box.rotation.set(Math.PI/2,0,0);
+      app.add(this.log2Box);
+    }
+
+    if(this.trajectory){this.inc = 1;}
+    else{this.inc = -1;}
+  }
+
+  update() {
+    this.center.__dirtyRotation = true;
+    this.center.__dirtyPosition = true;
+    this.center.rotation.set(this.center.rotation.x+0.005*this.inc,this.center.rotation.y,this.center.rotation.z);
+
+    this.log1Box.__dirtyRotation = true;
+    this.log1Box.__dirtyPosition = true;
+    this.log1Box.rotation.set(this.log1Box.rotation.x+0.005*this.inc,this.log1Box.rotation.y,this.log1Box.rotation.z);
+
+    if(this.doubleLog){
+      this.log2Box.__dirtyRotation = true;
+      this.log2Box.__dirtyPosition = true;
+      this.log2Box.rotation.set(this.log2Box.rotation.x+0.005*this.inc,this.log2Box.rotation.y,this.log2Box.rotation.z);
+    }
+  }
+
+  getMesh() {
+    return this.center;
+  }
+}
+
+//Classe associada á criação de um obstáculo.
+class Enemy extends Obj{
+  constructor(position,trajectory){
+    super();
+    this.material = Physijs.createMaterial(
+        concreteMaterial,
+        0.6,
+        0.8
+    );
+    this.mesh = new Physijs.SphereMesh(
+        new THREE.SphereGeometry(3, 20, 20),
+        this.material,  
+        0
+    );
+    this.mesh.position.set(position.x,position.y,position.z);
+    this.origin = position;
+    this.trajectory = trajectory;
+    this.t=0;
+    this.mesh.castShadow = true;
+    this.mesh.recieveShadow = true;
+
+    //Verifica se o jogador colidiu com um objeto da classe Enemy, caso isto ocorra o jogador é colocado na posição do último ponto de controlo ativo, uma vida é removida do mesmo e as suas velocidades linear e angular são colocadas a 0 em todos os eixos.
+    this.mesh.addEventListener( 'collision', function(object) {
+        object.__dirtyPosition = true;
+        if(object.mass > 0){
+          if(player.lifes>0) player.lifes--;
+          object.position.set(player.checkpoint.x,player.checkpoint.y,player.checkpoint.z);
+          object.setLinearVelocity(new THREE.Vector3(0,0,0));
+          object.setAngularVelocity( new THREE.Vector3(0,0,0) );
+        }
+      });
+}
+
+  update() {
+    this.mesh.__dirtyRotation = true;
+    this.mesh.__dirtyPosition = true;
+    let spline;
+    let matrix = new THREE.Matrix4();
+    let up = new THREE.Vector3( 0, 1, 0 );
+    let axis = new THREE.Vector3( );
+    let pt, radians, tangent;
+
+    let SUBDIVISIONS = 30;
+
+    switch(this.trajectory){
+      case 0:
+        spline = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z+20),
+                  ]);
+        break;
+      case 1:
+        spline = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z-20),
+                  ]);
+        break;
+      case 2:
+        spline = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(this.origin.x+40, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-40, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x+40, this.origin.y, this.origin.z+20),
+                  ]);
+        break;
+        case 3:
+          spline = new THREE.CatmullRomCurve3([
+                      new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                      new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z+20),
+                      new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+          ]);
+          break;
+        case 4:
+          spline = new THREE.CatmullRomCurve3([
+                      new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z+20),
+                      new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                      new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z+20),
+          ]);
+          break;
+        case 5:
+          spline = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(this.origin.x+40, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-40, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x-20, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+20, this.origin.y, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x+40, this.origin.y, this.origin.z-20),
+          ]);
+          break;
+        case 6:
+          spline = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+30, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+60, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+90, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+60, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x+30, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z),
+          ]);
+            break;
+        case 7:
+          spline = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-30, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-60, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-90, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-60, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x-30, this.origin.y, this.origin.z),
+                    new THREE.Vector3(this.origin.x, this.origin.y, this.origin.z),
+          ]);
+          break;
+        case 8:
+          spline = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(this.origin.x, this.origin.y-20, this.origin.z-30),
+                    new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z-10),
+                    new THREE.Vector3(this.origin.x, this.origin.y+5, this.origin.z),
+                    new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z+10),
+                    new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x, this.origin.y-40, this.origin.z+30),
+                    new THREE.Vector3(this.origin.x, this.origin.y-50, this.origin.z+40),
+                    new THREE.Vector3(this.origin.x, this.origin.y-40, this.origin.z+30),
+                    new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z+20),
+                    new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z+10),
+                    new THREE.Vector3(this.origin.x, this.origin.y+5, this.origin.z),
+                    new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z-10),
+                    new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z-20),
+                    new THREE.Vector3(this.origin.x, this.origin.y-20, this.origin.z-30),
+          ]);
+            break;
+          case 9:
+            spline = new THREE.CatmullRomCurve3([
+                      new THREE.Vector3(this.origin.x, this.origin.y-20, this.origin.z+30),
+                      new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z+20),
+                      new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z+10),
+                      new THREE.Vector3(this.origin.x, this.origin.y+5, this.origin.z),
+                      new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z-10),
+                      new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z-20),
+                      new THREE.Vector3(this.origin.x, this.origin.y-40, this.origin.z-30),
+                      new THREE.Vector3(this.origin.x, this.origin.y-50, this.origin.z-40),
+                      new THREE.Vector3(this.origin.x, this.origin.y-40, this.origin.z-30),
+                      new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z-20),
+                      new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z-10),
+                      new THREE.Vector3(this.origin.x, this.origin.y+5, this.origin.z),
+                      new THREE.Vector3(this.origin.x, this.origin.y+1, this.origin.z+10),
+                      new THREE.Vector3(this.origin.x, this.origin.y-10, this.origin.z+20),
+                      new THREE.Vector3(this.origin.x, this.origin.y-20, this.origin.z+30),
+            ]);
+            break;
+    }
+
+                let material = new THREE.LineBasicMaterial({
+                    color: 0xff00f0,
+                });
+                let geometry = new THREE.Geometry();
+                for(var i = 0; i < spline.getPoints(SUBDIVISIONS).length; i++){
+                    geometry.vertices.push(spline.getPoints(SUBDIVISIONS)[i]);  
+                }
+                let line = new THREE.Line(geometry, material);
+                //app.add(line); //Comentado por causar quedas de fps
+
+    pt = spline.getPoint( this.t );
+                this.mesh.position.set( pt.x, pt.y, pt.z );
+ 
+                // get the tangent to the curve
+                tangent = spline.getTangent( this.t ).normalize();
+
+                // calculate the axis to rotate around
+                axis.crossVectors( up, tangent ).normalize();
+
+                // calcluate the angle between the up vector and the tangent
+                radians = Math.acos( up.dot( tangent ) );
+
+                // set the quaternion
+                this.mesh.quaternion.setFromAxisAngle( axis, radians );
+
+                this.t = (this.t >= 1) ? 0 : this.t += 0.0015;
+                
+    }
+
+  getMesh() {
+    return this.mesh;
+  }
+}
+
+//Retirado de:
+//https://builtin.com/software-engineering-perspectives/javascript-sleep
+const sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay))
+
+//Classe associada à criação e controlo do jogador.
+class Player extends Obj{
+  constructor(position){
+    super();
+    this.material = Physijs.createMaterial(
+      new THREE.MeshPhongMaterial({map: concreteTexture}),
+      0.2,
+      0.6
+    );
+    this.mesh = new Physijs.SphereMesh(
+        new THREE.SphereGeometry(4,20,20),
+        this.material,  
+        5
+      );
+
+    this.focus = new THREE.Object3D();
+    this.perspective = new THREE.Object3D();
+    this.mesh.position.set(position.x,position.y,position.z);
+    this.perspective.position.set(position.x-10,position.y,position.z);
+    this.checkpoint = position;
+    this.lifes = 3;
+    this.victory = false;
+    this.defeat = false;
+    this.jump = true;
+  }
+
+  toVector(){
+    return new THREE.Vector3(this.mesh.position.x,this.mesh.position.y,this.mesh.position.z);
+  }
+
+  getCheckpoint(){
+    return new THREE.Vector3(this.checkpoint.x,this.checkpoint.y,this.checkpoint.z);
+  }
+
+  async update(){
+    this.perspective.position.set(this.mesh.position.x-10,this.mesh.position.y,this.mesh.position.z);
+      text.textContent = "Vidas: "+this.lifes;
+      let defeat = false;
+      let victory = false;
+      if(this.lifes===0){
+        this.defeat = true;
+      }
+      //Apenas ocorre quando a condição de vitória ou de derrota é verificada.
+      if(this.defeat || this.victory){
+        //Se se verificar a condição de derrota mostra a mensagem de fim do jogo.
+        if(this.defeat){
+          gameOver.style.visibility = "visible";
+        }
+        //Se se verificar a condição de vitória mostra a mensagem de vitória
+        else if(this.victory){
+          gameEnd.style.visibility = "visible";
+        }
+        this.mesh.setLinearVelocity(new THREE.Vector3(0,0,0));
+      }
+
+      else{
+        let floorHeight = 9;
+        let velocity = this.mesh.getLinearVelocity();
+        //Andar para a esquerda
+        if ( keyboard.pressed("A") ){
+          if(velocity.z>-8) this.mesh.setLinearVelocity( new THREE.Vector3(velocity.x, velocity.y, -5+velocity.z) );
+        }
+
+        //Andar para a direita
+        if ( keyboard.pressed("D") ){
+          if(velocity.z<8) this.mesh.setLinearVelocity( new THREE.Vector3(velocity.x, velocity.y, 5+velocity.z) );
+        }
+
+        //Andar para a frente
+        if ( keyboard.pressed("W") ){
+          if(velocity.x<8) this.mesh.setLinearVelocity( new THREE.Vector3(3+velocity.x, velocity.y, velocity.z) );
+        }
+
+        //Andar para trás
+        if ( keyboard.pressed("S") ){
+          if(velocity.x>-8) this.mesh.setLinearVelocity( new THREE.Vector3(-3+velocity.x, velocity.y, velocity.z) );
+        } 
+
+        //Imobilizar o personagem
+        if ( keyboard.pressed("E") ){
+          if(this.mesh.position.y <  floorHeight+0.1)
+            this.mesh.setLinearVelocity( new THREE.Vector3(0, 0, 0) );
+            this.mesh.setAngularVelocity( new THREE.Vector3(0,0,0) );
+        }
+
+        //Saltar
+        if ( keyboard.pressed("Q") ){
+          if(this.jump){
+            this.mesh.setLinearVelocity( new THREE.Vector3(velocity.x, 200, velocity.z) );
+            this.jump=false;
+            await sleep(950);
+            this.jump=true;
+          }
+        }
+
+        //Condição para colocar o jogador no checkpoint ativo mais próximo e remover uma vida do mesmo quando este cai do mapa.
+        if(this.mesh.position.y < -20){
+          this.mesh.setLinearVelocity( new THREE.Vector3(0,0,0) );
+          this.mesh.setAngularVelocity( new THREE.Vector3(0,0,0) );
+          this.mesh.__dirtyPosition = true;
+          this.mesh.position.set(this.checkpoint.x,this.checkpoint.y,this.checkpoint.z);
+          if(this.lifes>0){this.lifes--;}
+        }
+      }
+    }
+  getMesh() {
+
+    return this.mesh;
+  }
+}
+
+var player = new Player({x:0,y:10,z:0});
+var perp = new THREE.Object3D();
+perp.position.set(player.mesh.position.x-10,15,player.mesh.position.z);
+
+class Application {
+  constructor() {
+    this.objects = [];
+    this.createScene();
+  }
+  
+  createScene() {
+    this.scene = new Physijs.Scene;
+	this.scene.setGravity(new THREE.Vector3( 0, -500, 0 ));
+    this.camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 2400);
+    this.controls = new THREE.OrbitControls( this.camera ); //Permite o controlo da camera
+	  this.controls.damping = 1;
+    this.camera.position.set(perp.position.x,perp.position.y,perp.position.z);
+    this.camera.lookAt(player.mesh.position);
+
+    perp.add(this.camera);
+    this.controls.update;
+
+    let listener = new THREE.AudioListener();
+    this.camera.add( listener );
+
+    //Cria uma fonte de audio global
+    let sound = new THREE.Audio( listener );
+
+    //Carrega o som e coloca-o como buffer do objeto Audio
+    let audioLoader = new THREE.AudioLoader();
+    audioLoader.load( 'audio/ocean.wav', function( buffer ) {
+      sound.setBuffer( buffer );
+      sound.setLoop( true );
+      sound.setVolume( 0.5 );
+      sound.play();
+    });
+
+    this.controls.rotateSpeed = 0.5;
+  	this.controls.zoomSpeed = 0;
+
+	  this.controls.minDistance = 3;
+	  this.controls.maxDistance = 5;
+
+    this.controls.minPolarAngle = (Math.PI)/4; // radians
+    this.controls.maxPolarAngle = (3*Math.PI)/4; // radians
+
+    this.controls.minAzimuthAngle = -(3*Math.PI) /4;
+    this.controls.maxAzimuthAngle = -(Math.PI)/4;
+
+	  this.controls.enableDamping = false;
+
+    this.renderer = new THREE.WebGLRenderer({antialias:false});
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.BasicShadowMap
+    this.renderer.setPixelRatio(window.devicePixelRatio*0.5);
+    document.body.appendChild(this.renderer.domElement);
+
+    this.animate();	
+  }
+  
+	animate() {
+		requestAnimationFrame( () => this.animate() );  //Chama o método animate
+
+		this.objects.forEach((object) => {
+            if(object instanceof Obj)
+                object.update() }); //Cada objeto é responsável por se animar a si mesmo
+		this.render();		
+	}
+			
+	render() { 
+	    this.renderer.render(this.scene, this.camera); 
+      
+        this.scene.simulate();
+        perp.position.set(player.mesh.position.x-10,player.mesh.position.y+5,player.mesh.position.z);
+        keyboard.update();
+    }
+  
+  add(mesh) {
+	if (Array.isArray(mesh)){
+		for(var index in mesh){
+			this.objects.push(mesh[index]);
+            if(mesh[index] instanceof Obj){this.scene.add( mesh[index].getMesh());}
+            if(mesh[index] instanceof Light){this.scene.add(mesh[index].getLight());}
+		}		
+			
+	}
+	else{
+		this.objects.push(mesh);
+        if(mesh instanceof Obj){this.scene.add(mesh.getMesh());}
+        else if(mesh instanceof Light){this.scene.add(mesh.getLight());}
+        else{this.scene.add(mesh);}
+	}
+    
+  }
+}
+
+let app = new Application();
+app.add(perp);
+app.add(player);
+//app.add(new THREE.AmbientLight('white'));
+
+let objs = [
+  new Skybox(),
+  new Ocean(),
+
+  new Map({x:0,y:0,z:0}),
+
+  new LoaderGLTF({x:-50,y:-12,z:-70},{x:0,y:0,z:0},{x:20,y:20,z:20},'imports/buoy_model/scene.gltf'),
+  new LoaderGLTF({x:350,y:-12,z:70},{x:0,y:0,z:0},{x:20,y:20,z:20},'imports/buoy_model/scene.gltf'),
+  new LoaderGLTF({x:750,y:-12,z:-70},{x:0,y:0,z:0},{x:20,y:20,z:20},'imports/buoy_model/scene.gltf'),
+  new LoaderGLTF({x:1150,y:-12,z:70},{x:0,y:0,z:0},{x:20,y:20,z:20},'imports/buoy_model/scene.gltf'),
+  new LoaderGLTF({x:1550,y:-12,z:-70},{x:0,y:0,z:0},{x:20,y:20,z:20},'imports/buoy_model/scene.gltf'),
+  new LoaderGLTF({x:1950,y:-12,z:70},{x:0,y:0,z:0},{x:20,y:20,z:20},'imports/buoy_model/scene.gltf'),
+
+  new HolophoteLigth({x:-50,y:10,z:-70}),
+  new HolophoteLigth({x:350,y:10,z:70}),
+  new HolophoteLigth({x:750,y:10,z:-70}),
+  new HolophoteLigth({x:1150,y:10,z:70}),
+  new HolophoteLigth({x:1550,y:10,z:-70}),
+  new HolophoteLigth({x:1950,y:10,z:70}),
+  new SunLigth({x:-30,y:50,z:30}),
+
+  new Scenario({x:70,y:0,z:200}),
+  new Scenario({x:575,y:0,z:-420}),
+  new Scenario({x:-250,y:0,z:370}),
+  new Scenario({x:495,y:0,z:-575}),
+  new Scenario({x:740,y:0,z:325}),
+  new Scenario({x:-40,y:0,z:685}),
+  new Scenario({x:400,y:0,z:545}),
+  new Scenario({x:275,y:0,z:-565}),
+  new Scenario({x:805,y:0,z:-235}),
+  new Scenario({x:1175,y:0,z:765}),
+  new Scenario({x:1620,y:0,z:230}),
+  new Scenario({x:1495,y:0,z:-315}),
+];
+app.add(objs);
+
+</script>
+  </body>
+</html>
